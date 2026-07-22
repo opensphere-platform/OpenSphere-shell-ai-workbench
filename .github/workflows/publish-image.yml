@@ -1,4 +1,4 @@
-name: Publish OpenSphere AI Hub image
+name: Publish OpenSphere AI Workbench image
 
 on:
   workflow_dispatch:
@@ -27,11 +27,11 @@ permissions:
   artifact-metadata: write
 
 concurrency:
-  group: opensphere-shell-ai-edge-image
+  group: opensphere-shell-ai-workbench-edge-image
   cancel-in-progress: false
 
 env:
-  IMAGE: ghcr.io/opensphere-platform/opensphere-shell-ai
+  IMAGE: ghcr.io/opensphere-platform/opensphere-shell-ai-workbench
 
 jobs:
   test:
@@ -115,8 +115,8 @@ jobs:
             OS_MODULE_SIGNATURE=${{ steps.package.outputs.signature }}
             OS_MODULE_KEY_ID=opensphere-plugins-v1
           provenance: mode=max
-          cache-from: type=gha,scope=opensphere-shell-ai
-          cache-to: type=gha,mode=max,scope=opensphere-shell-ai
+          cache-from: type=gha,scope=opensphere-shell-ai-workbench
+          cache-to: type=gha,mode=max,scope=opensphere-shell-ai-workbench
       - uses: imjasonh/setup-crane@v0.4
       - name: Verify signed module labels
         run: bash .github/scripts/verify-module-label.sh "${{ env.IMAGE }}@${{ steps.build.outputs.digest }}" "${{ steps.package.outputs.version }}"
@@ -130,13 +130,13 @@ jobs:
         with:
           image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
           format: spdx-json
-          output-file: ${{ runner.temp }}/opensphere-shell-ai.spdx.json
+          output-file: ${{ runner.temp }}/opensphere-shell-ai-workbench.spdx.json
           upload-artifact: false
       - uses: actions/attest@v4
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.build.outputs.digest }}
-          sbom-path: ${{ runner.temp }}/opensphere-shell-ai.spdx.json
+          sbom-path: ${{ runner.temp }}/opensphere-shell-ai-workbench.spdx.json
           push-to-registry: true
       - name: Advance edge channel
         shell: bash

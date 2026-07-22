@@ -47,8 +47,8 @@ Host Controller에는 `AI_WORKBENCH_IMAGE`를 승인된 immutable OCI digest로 
 없거나 digest가 아니면 AI workload의 `/readyz`는 503을 반환하며 activation이 fail-closed 됩니다.
 
 ```powershell
-os extensions inspect ghcr.io/opensphere-platform/opensphere-shell-ai:edge
-os extensions install ghcr.io/opensphere-platform/opensphere-shell-ai:edge --reason "AI Hub 검증 설치"
+os extensions inspect ghcr.io/opensphere-platform/opensphere-shell-ai-workbench:edge
+os extensions install ghcr.io/opensphere-platform/opensphere-shell-ai-workbench:edge --reason "AI Hub 검증 설치"
 os extensions activate ai
 os ai readiness
 ```

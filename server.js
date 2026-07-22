@@ -8030,7 +8030,7 @@ async function seedNativeCatalog(req) {
     metadata: { name: 'opensphere-ai-default', namespace: 'opensphere-system' },
     spec: {
       sourceType: 'embedded',
-      sourceRef: 'opensphere-shell-ai/server.js',
+      sourceRef: 'opensphere-shell-ai-workbench/server.js',
       pollInterval: '10m',
       components: NATIVE_COMPONENTS.map((component) => component.name),
     },

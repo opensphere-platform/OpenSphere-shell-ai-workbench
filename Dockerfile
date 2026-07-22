@@ -16,7 +16,7 @@ ARG OS_MODULE_KEY_ID=opensphere-plugins-v1
 RUN apk upgrade --no-cache
 LABEL org.opencontainers.image.title="OpenSphere AI Hub" \
       org.opencontainers.image.version="1.1.0-edge.1" \
-      org.opencontainers.image.source="https://github.com/opensphere-platform/OpenSphere-shell-ai" \
+      org.opencontainers.image.source="https://github.com/opensphere-platform/OpenSphere-shell-ai-workbench" \
       io.opensphere.module.descriptor=$OS_MODULE_DESCRIPTOR \
       io.opensphere.module.descriptor.signature=$OS_MODULE_SIGNATURE \
       io.opensphere.module.descriptor.key-id=$OS_MODULE_KEY_ID
