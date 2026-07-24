@@ -54,7 +54,7 @@ for (const endpoint of [
 for (const contract of [
   'X-OS-Correlation-ID is required', 'X-OS-Idempotency-Key is required',
   'schema: LOG_SCHEMA', 'durationMs:', 'durable audit unavailable',
-  'opensphere-auth.opensphere-console-auth.svc',
+  'opensphere-console-backend.opensphere-console.svc.cluster.local',
 ]) assert.ok(server.includes(contract), `backend contract missing: ${contract}`);
 
 assert.match(rbac, /name:\s*ai-runtime/);

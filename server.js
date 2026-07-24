@@ -43,22 +43,12 @@ const ADMIN_GROUPS = (process.env.OSP_ADMIN_GROUPS || 'opensphere-console-admins
   .map((item) => item.trim())
   .filter(Boolean);
 
-// ── 쓰기 인가: 호출자 토큰을 검증 → Impersonate-User (SA 광범위 write 금지) ──
-// Kanidm 콘솔 id_token(ES256) 전용 — cutover 완료, 레거시 Keycloak RS256 dual-accept 경로는 제거됨.
-const { createHash, createPublicKey, randomBytes, randomUUID, verify: cryptoVerify } = require('crypto');
-// Kanidm 콘솔 IdP — split-horizon: 토큰 iss는 브라우저값(localhost:8444), JWKS는 in-cluster svc.
-const DEFAULT_KANIDM_ISSUERS = [
-  'https://localhost:8444/oauth2/openid/opensphere-console',
-  'https://auth.console.opensphere.dev/oauth2/openid/opensphere-console',
-];
-const KANIDM_ISSUERS = (process.env.KANIDM_ISSUERS || process.env.KANIDM_ISS || DEFAULT_KANIDM_ISSUERS.join(','))
-  .split(',')
-  .map((item) => item.trim())
-  .filter(Boolean);
-const KANIDM_JWKS_URL = process.env.KANIDM_JWKS_URL || 'https://opensphere-auth.opensphere-console-auth.svc:8443/oauth2/openid/opensphere-console/public_key.jwk';
-const KANIDM_TLS_SERVERNAME = process.env.KANIDM_TLS_SERVERNAME || 'kanidm.opensphere-console-auth.svc';
-const KANIDM_AZP = process.env.KANIDM_AZP || 'opensphere-console';
-const KANIDM_CA_PATH = process.env.KANIDM_CA_PATH || '/etc/kanidm-ca/ca.crt';
+// ── Console 신원 검증 ──
+// AI SubShell은 Supabase JWT 비밀이나 별도 JWKS 정책을 소유하지 않는다. Console Backend가
+// Supabase Auth 세션과 console.operator_role을 함께 검증하는 단일 identity authority다.
+const { createHash, randomBytes, randomUUID } = require('crypto');
+const CONSOLE_IDENTITY_URL = (process.env.CONSOLE_IDENTITY_URL
+  || 'http://opensphere-console-backend.opensphere-console.svc.cluster.local:8080').replace(/\/$/, '');
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const IDENTITY_GROUP_CLAIM_KEYS = ['groups', 'groups_name', 'group_names', 'roles'];
 const SERVICE = 'ai';
@@ -140,51 +130,28 @@ function standardLog(event) {
 function incrementMetric(map, key, amount = 1) {
   map.set(key, (map.get(key) || 0) + amount);
 }
-// Kanidm JWKS — 자체서명 CA를 명시적 'ca' 옵션으로 신뢰(TLS 검증 비활성화 금지, NODE_EXTRA_CA_CERTS 미접촉).
-let _kjwks = null, _kjwksAt = 0;
-const KJWKS_TTL = 5 * 60 * 1000;
-function _kanidmGetJwks(force) {
-  return new Promise((resolve, reject) => {
-    if (!force && _kjwks && (Date.now() - _kjwksAt) < KJWKS_TTL) return resolve(_kjwks);
-    const u = new URL(KANIDM_JWKS_URL);
-    const opts = { hostname: u.hostname, port: u.port || 443, path: u.pathname + u.search, method: 'GET', servername: KANIDM_TLS_SERVERNAME };
-    try { opts.ca = fs.readFileSync(KANIDM_CA_PATH); } catch (e) { console.error('[auth] kanidm CA read failed: ' + e); }
-    const rq = https.request(opts, (resp) => {
-      const ch = []; resp.on('data', (c) => ch.push(c));
-      resp.on('end', () => { try { const j = JSON.parse(Buffer.concat(ch).toString('utf8')); _kjwks = j.keys || (j.kty ? [j] : []); _kjwksAt = Date.now(); resolve(_kjwks); } catch (e) { reject(e); } });
+async function verifyToken(rawToken, identityFetch = fetch) {
+  if (!rawToken) throw { code: 401, msg: 'no bearer token' };
+  let response;
+  try {
+    response = await identityFetch(`${CONSOLE_IDENTITY_URL}/api/identity/session`, {
+      headers: { authorization: `Bearer ${rawToken}`, accept: 'application/json' },
+      signal: AbortSignal.timeout(3000),
     });
-    rq.on('error', reject); rq.end();
-  });
-}
-const b64urlJson = (s) => JSON.parse(Buffer.from(s, 'base64url').toString('utf8'));
-async function verifyToken(idToken) {
-  if (!idToken) throw { code: 401, msg: 'no id token' };
-  const parts = idToken.split('.');
-  if (parts.length !== 3) throw { code: 401, msg: 'malformed token' };
-  const header = b64urlJson(parts[0]);
-  const sig = Buffer.from(parts[2], 'base64url');
-  // ── Kanidm 콘솔 id_token (ES256) 전용 — alg pin (fail closed) ──
-  if (header.alg !== 'ES256') throw { code: 401, msg: 'unexpected alg' };
-  let jwk = (await _kanidmGetJwks()).find((k) => k.kid === header.kid);
-  if (!jwk) jwk = (await _kanidmGetJwks(true)).find((k) => k.kid === header.kid); // 키 롤오버 재시도
-  if (!jwk) throw { code: 401, msg: 'unknown kid (kanidm)' };
-  if (!jwk) throw { code: 401, msg: 'unknown kid (kanidm)' };
-  const pub = createPublicKey({ key: jwk, format: 'jwk' });
-  // ECDSA P-256: JWS 서명은 raw r||s(IEEE-P1363)이며 DER이 아님 → dsaEncoding 명시 필수.
-  const ok = cryptoVerify('SHA256', Buffer.from(`${parts[0]}.${parts[1]}`), { key: pub, dsaEncoding: 'ieee-p1363' }, sig);
-  if (!ok) throw { code: 401, msg: 'bad signature' };
-  const c = b64urlJson(parts[1]); // 검증된 클레임
-  // split-horizon: 토큰 iss는 브라우저값(localhost:8444) — 정확히 일치해야 함(JWKS는 in-cluster svc에서 받음).
-  if (!KANIDM_ISSUERS.includes(c.iss)) throw { code: 401, msg: 'bad iss' };
-  const aud = Array.isArray(c.aud) ? c.aud : c.aud ? [c.aud] : [];
-  if (c.azp !== KANIDM_AZP && !aud.includes(KANIDM_AZP)) throw { code: 401, msg: 'bad azp/aud' };
-  // ── 공통 꼬리: 시간 검증 + 클레임 추출 ──
-  const now = Date.now();
-  if (c.exp && c.exp * 1000 < now) throw { code: 401, msg: 'token expired' };
-  if (c.nbf && c.nbf * 1000 > now + 30000) throw { code: 401, msg: 'token not yet valid' };
+  } catch {
+    throw { code: 503, msg: 'Supabase identity authority unavailable' };
+  }
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw { code: response.status === 403 ? 403 : 401, msg: body.error || 'invalid Supabase session' };
+  }
   return {
-    username: identityUsernameFromClaims(c),
-    groups: identityGroupsFromClaims(c),
+    username: body.username || body.subject || 'unknown',
+    subject: body.subject || '',
+    groups: identityGroupAliases(body.groups),
+    permissions: Array.isArray(body.permissions) ? body.permissions : [],
+    assurance: String(body.assurance || 'aal1'),
+    provider: 'supabase',
   };
 }
 const readBody = (req) => {
@@ -5765,7 +5732,9 @@ function identityGroupsFromClaims(claims = {}) {
     values.push(...identityClaimStrings(claims[key]));
   }
   values.push(...identityClaimStrings(claims.realm_access?.roles));
-  values.push(...identityClaimStrings(claims.resource_access?.[KANIDM_AZP]?.roles));
+  for (const access of Object.values(claims.resource_access || {})) {
+    values.push(...identityClaimStrings(access?.roles));
+  }
   return identityGroupAliases(values);
 }
 
@@ -8890,11 +8859,10 @@ function oahAgentToolsManifest() {
     },
     security: {
       headers: {
-        // OAH authenticates on x-os-id-token alone (JWKS/issuer/audience/group claim
-        // verification). Authorization: Bearer carries the OpenSphere PAT for BFF/registry
-        // calls only — OAH does not accept an opaque PAT as x-os-id-token (2026-07-03 review).
+        // OAH authenticates x-os-id-token through the Console Supabase session authority.
+        // Authorization: Bearer carries the OpenSphere PAT for BFF/registry calls only.
         auth: 'Authorization: Bearer <OpenSphere PAT> (BFF/registry only — not evaluated by OAH)',
-        idToken: 'x-os-id-token: <Kanidm/OIDC id_token, or an OAH-verifiable delegated agent JWT> (required for OAH API calls)',
+        idToken: 'x-os-id-token: <Supabase access token> (required for OAH API calls)',
         correlation: 'X-OS-Correlation-ID: <stable user-request or agent-task id>',
         idempotency: 'X-OS-Idempotency-Key: <required for mutating apply calls>',
       },
@@ -16531,13 +16499,17 @@ async function aiRuntimeReadiness() {
   const checks = [];
   const tokenPresent = fs.existsSync(`${SA}/token`);
   checks.push({ name: 'serviceAccountToken', ready: tokenPresent });
-  checks.push({ name: 'kanidmCa', ready: fs.existsSync(KANIDM_CA_PATH) });
   checks.push({ name: 'workbenchImage', ready: /^.+@sha256:[a-f0-9]{64}$/i.test(WORKBENCH_IMAGE) });
-  const [apiVersion, backbone, workbenchClaimCrd] = await Promise.all([
+  const [identityAuthority, apiVersion, backbone, workbenchClaimCrd] = await Promise.all([
+    fetch(`${CONSOLE_IDENTITY_URL}/api/identity/session`, {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(3000),
+    }).then((response) => [200, 401, 403].includes(response.status)).catch(() => false),
     tokenPresent ? k8sJson('/version') : null,
     tokenPresent ? k8sJson(`/apis/backbone.opensphere.io/v1alpha1/namespaces/${AI_DOMAIN_NAMESPACE}/backboneclaims/${BACKBONE_CLAIM_NAME}`) : null,
     tokenPresent ? crdInstalled('workbenchclaims.ai.opensphere.io') : false,
   ]);
+  checks.push({ name: 'supabaseIdentityAuthority', ready: identityAuthority });
   checks.push({ name: 'kubernetesApi', ready: !!apiVersion });
   checks.push({ name: 'backboneClaim', ready: !!backbone });
   checks.push({ name: 'workbenchClaimCrd', ready: !!workbenchClaimCrd });

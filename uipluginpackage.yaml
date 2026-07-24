@@ -18,8 +18,8 @@ spec:
   env:
     - name: OSP_ADMIN_GROUPS
       value: "opensphere-console-admins,opensphere-admins,system:masters,cluster-admins"
-    - name: KANIDM_JWKS_URL
-      value: "https://opensphere-auth.opensphere-console-auth.svc:8443/oauth2/openid/opensphere-console/public_key.jwk"
+    - name: CONSOLE_IDENTITY_URL
+      value: "http://opensphere-console-backend.opensphere-console.svc.cluster.local:8080"
   image:
     repository: ai
     digest: sha256:a65af5151f049ad3b1dbd070a2f7a05d89779226f8736814170ba11d32a9e613
