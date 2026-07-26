@@ -4,7 +4,7 @@ const path = require('node:path');
 const yaml = require('js-yaml');
 
 const root = path.resolve(__dirname, '..');
-const manifest = JSON.parse(fs.readFileSync(path.join(root, 'ui-shell', 'ui-shell.manifest.json'), 'utf8'));
+const manifest = JSON.parse(fs.readFileSync(path.join(root, 'ui-shell', 'ui-shell.manifest.source.json'), 'utf8'));
 const resources = yaml.loadAll(fs.readFileSync(path.join(root, 'uipluginpackage.yaml'), 'utf8'));
 const pkg = resources.find((item) => item?.kind === 'UIPluginPackage');
 const registration = resources.find((item) => item?.kind === 'UIPluginRegistration');
@@ -32,7 +32,7 @@ for (const name of ['page', 'navigation', 'api', 'cli', 'manual', 'search', 'not
   assert.equal(manifest.contributions[name].enabled, true, `manifest contribution disabled: ${name}`);
   assert.equal(pkg.spec.contributions[name].enabled, true, `package contribution disabled: ${name}`);
 }
-assert.equal(pkg.spec.cli.namespace, 'ai');
+assert.equal(pkg.spec.cli.namespace, 'ai-workbench');
 assert.equal(pkg.spec.cli.manifestPath, '/admin/native/agent-tools');
 assert.equal(pkg.spec.contributions.manual.mode, 'runtime');
 assert.equal(pkg.spec.contributions.manual.sourceId, 'opensphere-ai-hub');

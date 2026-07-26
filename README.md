@@ -13,8 +13,8 @@ OpenSphere AI Hub는 `OpenSphere-shell-template`의 Production subShell 기준�
 | 항목 | AI Hub 구현 |
 |---|---|
 | Canonical ID / host | `ai` / `main` |
-| Page | `/p/ai/*` |
-| API | `/api/plugins/ai` |
+| Page | `/p/ai-workbench/*` |
+| API | `/api/plugins/ai-workbench` |
 | CLI | `os ai` · `/admin/native/agent-tools` |
 | Manual | `ui-shell/manual/ai.ko.md` 런타임 등록 |
 | Search | Main Shell 통합 검색 provider |
@@ -49,6 +49,6 @@ Host Controller에는 `AI_WORKBENCH_IMAGE`를 승인된 immutable OCI digest로 
 ```powershell
 os extensions inspect ghcr.io/opensphere-platform/opensphere-shell-ai-workbench:edge
 os extensions install ghcr.io/opensphere-platform/opensphere-shell-ai-workbench:edge --reason "AI Hub 검증 설치"
-os extensions activate ai
-os ai readiness
+os extensions activate ai-workbench
+os ai-workbench readiness
 ```

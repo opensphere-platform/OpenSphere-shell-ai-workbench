@@ -12,6 +12,11 @@ import Settings16 from '@carbon/icons/es/settings/16';
 import Workspace16 from '@carbon/icons/es/workspace/16';
 import { AiCarbonIcon, type AiIconNode } from './ai-carbon-icon';
 
+// Host-owned module identity. The Main Shell keys its per-plugin context by the
+// signed manifest id and proxies /api/plugins/<id>; both must track that id.
+const HOST_CONTEXT_ID = 'ai-workbench';
+const API_BASE_FALLBACK = `/api/plugins/${HOST_CONTEXT_ID}`;
+
 type PageId =
   | 'home'
   | 'projects'
@@ -9286,7 +9291,7 @@ export class AppComponent implements OnInit, OnDestroy {
     const w = window as Window & {
       __OPENSPHERE_HOST_CONTEXTS__?: Record<string, { api?: { fetch?: (target: RequestInfo | URL, options?: RequestInit) => Promise<Response> } }>;
     };
-    const mediated = w.__OPENSPHERE_HOST_CONTEXTS__?.['ai']?.api?.fetch;
+    const mediated = w.__OPENSPHERE_HOST_CONTEXTS__?.[HOST_CONTEXT_ID]?.api?.fetch;
     return mediated ? mediated(input, init) : window.fetch(input, init);
   }
 
@@ -9307,7 +9312,7 @@ export class AppComponent implements OnInit, OnDestroy {
         };
       }>;
     };
-    return w.__OPENSPHERE_HOST_CONTEXTS__?.['ai']?.routing;
+    return w.__OPENSPHERE_HOST_CONTEXTS__?.[HOST_CONTEXT_ID]?.routing;
   }
 
   async refresh(): Promise<void> {
@@ -9330,7 +9335,7 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   gpuProductLogoUrl(): string {
-    return `${this.apiBase || '/api/plugins/ai'}/app/assets/brand/triangles-opensphere-logo.webp`;
+    return `${this.apiBase || API_BASE_FALLBACK}/app/assets/brand/triangles-opensphere-logo.webp`;
   }
 
   private async fetchSummary(): Promise<void> {

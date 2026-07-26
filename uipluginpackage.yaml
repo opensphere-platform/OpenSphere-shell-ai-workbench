@@ -1,7 +1,7 @@
 ﻿apiVersion: plugins.opensphere.io/v1alpha1
 kind: UIPluginPackage
 metadata:
-  name: ai
+  name: ai-workbench
   namespace: opensphere-system
 spec:
   kind: subShell
@@ -10,7 +10,7 @@ spec:
   hostCompat: ">=1.0.0 <2.0.0"
   displayName: "OpenSphere AI Hub"
   owner: platform-experience
-  version: 1.1.0-edge.1
+  version: 1.1.0
   description: "CONSTITUTION-0003 Production subShell reference for OpenSphere AI operations"
   serviceAccountName: ai-runtime
   podLabels:
@@ -20,8 +20,11 @@ spec:
       value: "opensphere-console-admins,opensphere-admins,system:masters,cluster-admins"
     - name: CONSOLE_IDENTITY_URL
       value: "http://opensphere-console-backend.opensphere-console.svc.cluster.local:8080"
+  # 정본 설치 경로는 `os extensions install`이며 Controller가 image inspection으로
+  # Package를 합성한다. 아래 repository/digest와 manifest.sha256은 이 정적 manifest를
+  # 직접 apply할 때만 쓰는 값으로, 매 release의 exact digest로 교체해야 한다.
   image:
-    repository: ai
+    repository: opensphere-shell-ai-workbench
     digest: sha256:a65af5151f049ad3b1dbd070a2f7a05d89779226f8736814170ba11d32a9e613
   nav:
     band: "Operate"
@@ -41,15 +44,15 @@ spec:
     - manual:contribute
     - notify:publish
   api:
-    basePath: /api/plugins/ai
+    basePath: /api/plugins/ai-workbench
   cli:
-    namespace: ai
+    namespace: ai-workbench
     manifestPath: /admin/native/agent-tools
   contributions:
     page: { enabled: true }
     navigation: { enabled: true, mode: "runtime" }
-    api: { enabled: true, basePath: "/api/plugins/ai" }
-    cli: { enabled: true, namespace: "ai", manifestPath: "/admin/native/agent-tools" }
+    api: { enabled: true, basePath: "/api/plugins/ai-workbench" }
+    cli: { enabled: true, namespace: "ai-workbench", manifestPath: "/admin/native/agent-tools" }
     manual: { enabled: true, sourceId: "opensphere-ai-hub", mode: "runtime" }
     search: { enabled: true, mode: "runtime" }
     notification: { enabled: true, frontend: true, backend: true }
@@ -58,11 +61,11 @@ spec:
 apiVersion: plugins.opensphere.io/v1alpha1
 kind: UIPluginRegistration
 metadata:
-  name: ai
+  name: ai-workbench
   namespace: opensphere-system
 spec:
   packageRef:
-    name: ai
+    name: ai-workbench
   desiredState: Enabled
   installPolicy:
     createWorkload: true

@@ -4,6 +4,8 @@
 *.md
 rbac.yaml
 uipluginpackage.yaml
+# 이미지에는 서명된 생성 manifest만 넣는다. source manifest는 빌드 입력이다.
+ui-shell/ui-shell.manifest.source.json
 node_modules
 dist
 .angular

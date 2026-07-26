@@ -1,6 +1,6 @@
 {
-  "name": "ai",
-  "version": "1.1.0-edge.1",
+  "name": "ai-workbench",
+  "version": "1.1.0",
   "description": "OpenSphere subShell — AI. Angular 22 + Clarity 18, exported as Angular Element <osp-ai-shell>. Standalone project: `ng build` → dist served by server.js (generic K8s proxy + WS exec).",
   "private": true,
   "scripts": {
@@ -8,6 +8,7 @@
     "start": "ng serve",
     "serve:backend": "node server.js",
     "package:module": "node tools/package-module.mjs",
+    "verify:artifacts": "node tools/verify-artifacts.mjs",
     "test": "npm run test:workspace-contracts && npm run test:ui",
     "test:contracts": "npm run test:standard && npm run test:rbac && node scripts/verify-constitution-0003.js",
     "test:workspace-contracts": "npm run test:contracts && npm run test:support-services",

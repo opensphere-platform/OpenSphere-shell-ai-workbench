@@ -1,5 +1,5 @@
 // AI — server.js. SDK 표준 subShell 피처 컨테이너: 제네릭 /api/k8s/* 프록시 + WS exec + Angular 범용콘솔(www) + subShell ui-shell 서빙.
-// 셸 nginx가 /api/plugins/ai/<X> → 이 서버 /<X> 로 prefix strip 프록시.
+// 셸 nginx가 /api/plugins/ai-workbench/<X> → 이 서버 /<X> 로 prefix strip 프록시.
 //   /plugins/*  → 매니페스트/번들/서명
 //   /app/*      → Angular dist(main.js, styles.css)
 //   /api/nodes  → 노드 집계
@@ -22,7 +22,10 @@ function tokenFromCookie(cookieHeader) {
 const PORT = process.env.PORT || 8080;
 const PLUGINS = process.env.PLUGINS_DIR || '/app/plugins';
 const WWW = process.env.WWW_DIR || '/app/www';
-const VERSION = process.env.APP_VERSION || '1.1.0-edge.1';
+const VERSION = process.env.APP_VERSION || '1.1.0';
+// Signed manifest id. The Main Shell proxies /api/plugins/<id> to this server,
+// so this must stay identical to ui-shell.manifest.source.json apiBase.
+const API_BASE = '/api/plugins/ai-workbench';
 const AI_DOMAIN_NAMESPACE = process.env.AI_DOMAIN_NAMESPACE || 'opensphere-system';
 const MANAGED_RUNTIME = process.env.OSP_AI_RUNTIME_MODE === 'managed';
 const WORKBENCH_IMAGE = process.env.WORKBENCH_IMAGE || (MANAGED_RUNTIME ? '' : 'localhost:5000/ai:workbench');
@@ -16479,7 +16482,7 @@ function aiOpenApi() {
   return {
     openapi: '3.1.0',
     info: { title: 'OpenSphere AI Hub API', version: VERSION },
-    servers: [{ url: '/api/plugins/ai' }],
+    servers: [{ url: API_BASE }],
     paths: {
       '/readyz': { get: { operationId: 'getAiReadiness', responses: { 200: { description: 'AI subShell readiness' } } } },
       '/api/status': { get: { operationId: 'getAiIntegrationStatus', responses: { 200: { description: 'AI runtime and integration readiness' } } } },
@@ -16697,7 +16700,7 @@ const server = http.createServer(async (req, res) => {
       const secure = req.headers['x-forwarded-proto'] === 'https' ? ' Secure;' : '';
       res.writeHead(200, {
         'content-type': 'application/json',
-        'set-cookie': `${COOKIE}=${encodeURIComponent(req.headers['x-os-id-token'])}; HttpOnly; SameSite=Strict; Path=/api/plugins/ai;${secure} Max-Age=600`,
+        'set-cookie': `${COOKIE}=${encodeURIComponent(req.headers['x-os-id-token'])}; HttpOnly; SameSite=Strict; Path=${API_BASE};${secure} Max-Age=600`,
       });
       return res.end(JSON.stringify({ user: actor.username }));
     }
