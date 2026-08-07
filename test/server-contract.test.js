@@ -89,7 +89,7 @@ test('serves the standard runtime contract with correlation and metrics', async 
   const manual = await fetch(`http://127.0.0.1:${port}/plugins/manual/ai.ko.md`);
   assert.equal(manual.status, 200);
   assert.match(manual.headers.get('content-type'), /text\/markdown/);
-  assert.match(await manual.text(), /OpenSphere AI Hub/);
+  assert.match(await manual.text(), /AI Workbench/);
 
   const metrics = await fetch(`http://127.0.0.1:${port}/metrics`);
   const exposition = await metrics.text();

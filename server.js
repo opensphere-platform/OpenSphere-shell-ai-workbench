@@ -22,7 +22,7 @@ function tokenFromCookie(cookieHeader) {
 const PORT = process.env.PORT || 8080;
 const PLUGINS = process.env.PLUGINS_DIR || '/app/plugins';
 const WWW = process.env.WWW_DIR || '/app/www';
-const VERSION = process.env.APP_VERSION || '1.1.0';
+const VERSION = process.env.APP_VERSION || '1.1.1';
 // Signed manifest id. The Main Shell proxies /api/plugins/<id> to this server,
 // so this must stay identical to ui-shell.manifest.source.json apiBase.
 const API_BASE = '/api/plugins/ai-workbench';
@@ -250,7 +250,7 @@ const LEARNING_RESOURCES = [
     href: 'https://developers.redhat.com/topics/open-data-hub',
   },
   {
-    title: 'OpenSphere AI Hub tutorial - agent operations example',
+    title: 'AI Workbench tutorial - agent operations example',
     provider: 'OpenSphere',
     type: 'Tutorial',
     duration: '1 hour',
@@ -258,7 +258,7 @@ const LEARNING_RESOURCES = [
     href: '#',
   },
   {
-    title: 'OpenSphere AI Hub CRD reference',
+    title: 'AI Workbench CRD reference',
     provider: 'Platform team',
     type: 'Documentation',
     duration: 'Reference',
@@ -1783,14 +1783,14 @@ function prometheusMetricsText() {
   lines.push('# TYPE opensphere_subshell_events_emitted_total counter');
   lines.push(`opensphere_subshell_events_emitted_total{service="${SERVICE}"} ${standardMetrics.emittedEvents}`);
   lines.push(
-    '# HELP opensphere_ai_controller_reconcile_total Total OpenSphere AI Hub claim reconciliations.',
+    '# HELP opensphere_ai_controller_reconcile_total Total AI Workbench claim reconciliations.',
     '# TYPE opensphere_ai_controller_reconcile_total counter',
   );
   for (const [key, item] of controllerMetrics.reconciles.entries()) {
     const labels = metricLabelsFromKey(key);
     lines.push(`opensphere_ai_controller_reconcile_total{controller="${labels.controller}",phase="${labels.phase}",backend="${labels.backend}"} ${item.total}`);
   }
-  lines.push('# HELP opensphere_ai_controller_reconcile_failures_total Total failed OpenSphere AI Hub claim reconciliations.');
+  lines.push('# HELP opensphere_ai_controller_reconcile_failures_total Total failed AI Workbench claim reconciliations.');
   lines.push('# TYPE opensphere_ai_controller_reconcile_failures_total counter');
   for (const [key, item] of controllerMetrics.reconciles.entries()) {
     const labels = metricLabelsFromKey(key);
@@ -1802,7 +1802,7 @@ function prometheusMetricsText() {
     const labels = metricLabelsFromKey(key);
     lines.push(`opensphere_ai_controller_reconcile_duration_ms_total{controller="${labels.controller}",phase="${labels.phase}",backend="${labels.backend}"} ${item.durationMsTotal}`);
   }
-  lines.push('# HELP opensphere_ai_controller_events_total Total Kubernetes Events emitted by OpenSphere AI Hub controller.');
+  lines.push('# HELP opensphere_ai_controller_events_total Total Kubernetes Events emitted by AI Workbench controller.');
   lines.push('# TYPE opensphere_ai_controller_events_total counter');
   for (const [key, item] of controllerMetrics.events.entries()) {
     const labels = metricLabelsFromKey(key);
@@ -1899,7 +1899,7 @@ async function nativeAuditLog() {
 const PASSIVE_RECONCILE_TARGETS = [
   { path: '/apis/orchestrator.ai.opensphere.io/v1alpha1/aiagents', plural: 'aiagents', kind: 'AIAgent', controller: 'agent-controller', phase: 'Ready', reason: 'AgentConfigured', message: 'Agent declaration is accepted by the OpenSphere internal controller.' },
   { path: '/apis/ai.opensphere.io/v1alpha1/dataconnectionclaims', plural: 'dataconnectionclaims', kind: 'DataConnectionClaim', controller: 'data-connection-controller', phase: 'Ready', reason: 'ConnectionConfigured', message: 'Data connection metadata is configured for workspace use.' },
-  { path: '/apis/ai.foundation.opensphere.io/v1alpha1/llmrouteclaims', plural: 'llmrouteclaims', kind: 'LLMRouteClaim', controller: 'llm-route-controller', phase: 'Ready', reason: 'RouteConfigured', message: 'LLM route is registered for OpenSphere AI Hub consumers.' },
+  { path: '/apis/ai.foundation.opensphere.io/v1alpha1/llmrouteclaims', plural: 'llmrouteclaims', kind: 'LLMRouteClaim', controller: 'llm-route-controller', phase: 'Ready', reason: 'RouteConfigured', message: 'LLM route is registered for AI Workbench consumers.' },
   { path: '/apis/ai.foundation.opensphere.io/v1alpha1/vectorretrievalclaims', plural: 'vectorretrievalclaims', kind: 'VectorRetrievalClaim', controller: 'retrieval-controller', phase: 'Ready', reason: 'RetrievalConfigured', message: 'Retrieval route is registered for RAG workflows.' },
   { path: '/apis/ai.opensphere.io/v1alpha1/pipelineclaims', plural: 'pipelineclaims', kind: 'PipelineClaim', controller: 'pipeline-controller', phase: 'Ready', reason: 'PipelineRegistered', message: 'Pipeline definition is registered and can be used by pipeline runs.' },
   { path: '/apis/ai.opensphere.io/v1alpha1/computebackendclaims', plural: 'computebackendclaims', kind: 'ComputeBackendClaim', controller: 'compute-controller', phase: 'Ready', reason: 'BackendConfigured', message: 'Compute backend claim is available for AI workloads.' },
@@ -3408,7 +3408,7 @@ async function launchWorkbench(req) {
     gpuClass: body.gpuClass || '',
     storage: body.storage || '20Gi',
   }, namespace);
-  const metadata = objectMeta(name, namespace, 'JupyterLab-compatible OpenSphere AI Hub workbench.');
+  const metadata = objectMeta(name, namespace, 'JupyterLab-compatible AI Workbench runtime.');
   if (routed.routedBackend) {
     metadata.annotations = {
       ...(metadata.annotations || {}),
@@ -6160,7 +6160,7 @@ async function ingestVectorMemoryItem({ namespace, collection, documentId, conte
   const text = optionalString(content);
   if (!text) throw { code: 400, msg: 'content is required' };
   return withModelRegistryPg(async (client) => {
-    await upsertVectorCollection(client, ns, collectionName, 'OpenSphere AI Hub pgvector memory collection.', {
+    await upsertVectorCollection(client, ns, collectionName, 'AI Workbench pgvector memory collection.', {
       provider: 'backbone-postgres',
       dimensions: 16,
       owner: optionalString(owner) || actor?.username || 'opensphere-ai-hub',
@@ -6187,7 +6187,7 @@ async function vectorMemoryBootstrap(req) {
   const namespace = requireDnsName(body.namespace || 'opensphere-system', 'namespace');
   const collection = requireDnsName(body.collection || 'oah-vector-memory', 'collection');
   const samples = [
-    { documentId: 'model-registry', content: 'OpenSphere AI Hub stores model versions, promotion decisions, evaluation metrics, and approval audit records in Backbone PostgreSQL.', topic: 'registry' },
+    { documentId: 'model-registry', content: 'AI Workbench stores model versions, promotion decisions, evaluation metrics, and approval audit records in Backbone PostgreSQL.', topic: 'registry' },
     { documentId: 'object-storage', content: 'Backbone RustFS provides S3-compatible object storage for model artifacts, KServe storageUri, and pipeline artifacts.', topic: 'storage' },
     { documentId: 'workbench', content: 'WorkbenchClaim starts a JupyterLab-compatible runtime with PVC workspace storage and optional data connection references.', topic: 'workbench' },
   ];
@@ -11584,7 +11584,7 @@ function oahPrometheusRuleManifest() {
             for: '5m',
             labels: { severity: 'warning' },
             annotations: {
-              summary: 'OpenSphere AI Hub controller reconcile failures detected',
+              summary: 'AI Workbench controller reconcile failures detected',
               description: 'One or more OAH controller reconciliations failed during the last 10 minutes.',
             },
           },
@@ -14898,7 +14898,7 @@ async function oahDemoPlan(req) {
     task('readiness', 'Operate', 'Prove platform readiness and auditability', 'Cluster settings', ['Native readiness', 'Controller metrics', 'Audit log'], 'Operator can verify native readiness, backend mode, GPU status, and audit log in one place.', false, nativeReady),
   ];
   return {
-    title: 'OpenSphere AI Hub GPU lifecycle demo',
+    title: 'AI Workbench GPU lifecycle demo',
     acronym: 'OAH',
     phase,
     generatedAt: new Date().toISOString(),
@@ -15085,7 +15085,7 @@ async function ensureDemoNamespace(namespace, req) {
     },
     annotations: {
       'opensphere.io/display-name': 'OAH GPU lifecycle demo',
-      'opensphere.io/description': 'OpenSphere AI Hub end-to-end lifecycle demo workspace.',
+      'opensphere.io/description': 'AI Workbench end-to-end lifecycle demo workspace.',
     },
   };
   if (existing) {
@@ -15371,7 +15371,7 @@ function smokeJobManifest(step, namespace, image) {
       labels,
       annotations: {
         'opensphere.io/display-name': step.title,
-        'opensphere.io/description': 'OpenSphere AI Hub executable lifecycle smoke demo job.',
+        'opensphere.io/description': 'AI Workbench executable lifecycle smoke demo job.',
       },
     },
     spec: {
@@ -15710,7 +15710,7 @@ async function oahDemoRunPreview(namespace = OAH_DEMO_NAMESPACE, req = null) {
       },
       annotations: {
         'opensphere.io/display-name': 'OAH GPU lifecycle demo',
-        'opensphere.io/description': 'OpenSphere AI Hub end-to-end lifecycle demo workspace.',
+        'opensphere.io/description': 'AI Workbench end-to-end lifecycle demo workspace.',
       },
     },
   };
@@ -16415,13 +16415,13 @@ async function k8sProxy(req, res, rawUrl) {
 }
 
 const AI_SEARCH_ITEMS = [
-  ['Workbench', 'Notebook and interactive development', '/p/ai/workbenches'],
-  ['Pipeline', 'Pipeline definitions and runs', '/p/ai/pipelines'],
-  ['Training', 'Training jobs and compute', '/p/ai/training/jobs'],
-  ['Model', 'Model registry and promotions', '/p/ai/models/registry'],
-  ['Inference', 'Serving runtimes and endpoints', '/p/ai/inference'],
-  ['Evaluation', 'Evaluation policies and jobs', '/p/ai/evaluation/jobs'],
-  ['Monitoring', 'TrustyAI metrics and alerts', '/p/ai/monitoring/trustyai'],
+  ['Workbench', 'Notebook and interactive development', '/p/ai-workbench/workbenches'],
+  ['Pipeline', 'Pipeline definitions and runs', '/p/ai-workbench/pipelines'],
+  ['Training', 'Training jobs and compute', '/p/ai-workbench/pipelines/training-jobs'],
+  ['Model', 'Model registry and promotions', '/p/ai-workbench/models/registry'],
+  ['Model deployments', 'Serving runtimes and endpoints', '/p/ai-workbench/models/deployments'],
+  ['Evaluation', 'Evaluation policies and jobs', '/p/ai-workbench/experiments/evaluation-jobs'],
+  ['Monitoring', 'TrustyAI metrics and alerts', '/p/ai-workbench/monitoring/trustyai'],
 ];
 
 const STANDARD_CONTRIBUTIONS = Object.freeze({
@@ -16449,8 +16449,8 @@ function aiManualSource() {
   return {
     schema: 'manual.opensphere.io/v1alpha1',
     sourceId: 'opensphere-ai-hub',
-    title: 'OpenSphere AI Hub Manual',
-    route: '/p/ai',
+    title: 'AI Workbench Manual',
+    route: '/p/ai-workbench',
     manualRoute: '/p/manual',
     locale: 'ko-KR',
     contentPath: '/plugins/manual/ai.ko.md',
@@ -16481,7 +16481,7 @@ function aiContract() {
 function aiOpenApi() {
   return {
     openapi: '3.1.0',
-    info: { title: 'OpenSphere AI Hub API', version: VERSION },
+    info: { title: 'AI Workbench API', version: VERSION },
     servers: [{ url: API_BASE }],
     paths: {
       '/readyz': { get: { operationId: 'getAiReadiness', responses: { 200: { description: 'AI subShell readiness' } } } },

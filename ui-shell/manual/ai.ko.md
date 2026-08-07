@@ -1,17 +1,17 @@
-# OpenSphere AI Hub
+# AI Workbench
 
-OpenSphere AI Hub는 Workbench, Pipeline, Training, Model Registry, Inference, Evaluation,
+AI Workbench는 Workbench, Pipeline, Training, Model Registry, Inference, Evaluation,
 Monitoring을 하나의 AI 운영 도메인으로 제공합니다. Main Shell의 인증·권한·감사·검색·알림
 경계를 그대로 사용하며 별도 로그인이나 독립 전역 UI를 만들지 않습니다.
 
 ## 시작하기
 
-1. [AI Hub 개요](/p/ai-workbench)에서 기반 서비스와 최종 준비 상태를 확인합니다.
+1. [AI Workbench 개요](/p/ai-workbench/overview)에서 기반 서비스와 최종 준비 상태를 확인합니다.
 2. [Workbenches](/p/ai-workbench/workbenches)에서 대화형 개발 환경을 준비합니다.
-3. [Pipelines](/p/ai-workbench/pipelines)와 [Training](/p/ai-workbench/training/jobs)에서 학습 실행을 관리합니다.
+3. [Pipelines](/p/ai-workbench/pipelines)와 [Training](/p/ai-workbench/pipelines/training-jobs)에서 학습 실행을 관리합니다.
 4. [Models](/p/ai-workbench/models/registry)에서 모델 버전과 승격 상태를 확인합니다.
-5. [Inference](/p/ai-workbench/inference)에서 서빙 대상을 배포하고 상태를 점검합니다.
-6. [Evaluation](/p/ai-workbench/evaluation/jobs)과 [Monitoring](/p/ai-workbench/monitoring/trustyai)에서 품질·정책·관측 증거를 확인합니다.
+5. [Model deployments](/p/ai-workbench/models/deployments)에서 서빙 대상을 배포하고 상태를 점검합니다.
+6. [Evaluation](/p/ai-workbench/experiments/evaluation-jobs)과 [Monitoring](/p/ai-workbench/monitoring/trustyai)에서 품질·정책·관측 증거를 확인합니다.
 
 ## CLI
 

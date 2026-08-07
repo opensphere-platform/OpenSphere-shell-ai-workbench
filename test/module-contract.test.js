@@ -23,6 +23,8 @@ test('declares the canonical Main Shell identity and API surface', () => {
     'page:register', 'api:proxy', 'nav:contribute', 'search:contribute',
     'manual:contribute', 'notify:publish',
   ]);
+  assert.equal(manifest.title, 'AI Workbench');
+  assert.equal(manifest.nav.label, 'AI Workbench');
 });
 
 test('implements every production integration contribution', () => {
@@ -45,7 +47,7 @@ test('ships actual navigation, search, manual and notification implementations',
   assert.match(entry, /extensions\.manual\.contribute/);
   assert.match(entry, /notify\?\.publish/);
   assert.match(entry, /extensions\.manual\?\.clear/);
-  assert.match(manual, /OpenSphere AI Hub/);
+  assert.match(manual, /^# AI Workbench/m);
   assert.match(manual, /os ai-workbench readiness/);
   assert.match(manual, /opensphere\.v1/);
 });
@@ -55,6 +57,19 @@ test('derives every host route from the host-owned plugin id', () => {
   assert.match(entry, /ctx\.routing\?\.basePath/);
   assert.doesNotMatch(entry, /'\/p\/ai/);
   assert.doesNotMatch(entry, /__OPENSPHERE_HOST_CONTEXTS__\.ai\b/);
+  assert.match(entry, /label: 'AI Workbench', route: routeBase/);
+  assert.doesNotMatch(entry, /AI Operations|\/training\/jobs|\/inference|\/evaluation\/jobs/);
+});
+
+test('uses one AI Workbench name and canonicalizes retired menu routes', () => {
+  const app = fs.readFileSync(path.join(root, 'src', 'app', 'app.component.ts'), 'utf8');
+  assert.match(app, /<strong>AI Workbench<\/strong>/);
+  assert.match(app, /\[href\]="pageHref\('home'\)"/);
+  assert.match(app, /const LEGACY_PAGE_ROUTE/);
+  assert.match(app, /'training\/jobs': 'training-jobs'/);
+  assert.match(app, /'evaluation\/jobs': 'eval-jobs'/);
+  assert.match(app, /hostRouting\(\)\?\.basePath \|\| '\/p\/ai-workbench'/);
+  assert.doesNotMatch(app, /OpenSphere AI Hub|OPENSPHERE AI HUB|AI Operations|href="\/p\/ai"/);
 });
 
 test('keeps signed release artifacts generated and the source manifest authoritative', () => {

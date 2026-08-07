@@ -1975,6 +1975,12 @@ const PAGE_ROUTE: Record<PageId, string> = {
   resources: 'resources',
 };
 
+const LEGACY_PAGE_ROUTE: Readonly<Record<string, PageId>> = Object.freeze({
+  'training/jobs': 'training-jobs',
+  inference: 'inference',
+  'evaluation/jobs': 'eval-jobs',
+});
+
 const CLUSTER_SETTINGS_TAB_ROUTE: Record<ClusterSettingsTab, string> = {
   setup: 'setup',
   foundation: 'foundation-services',
@@ -2401,7 +2407,7 @@ const DEFAULT_SUMMARY: SummaryResponse = {
   alerts: [{ severity: 'info', message: 'Overview counts show actual cluster resources. Reference examples are labeled separately.' }],
   learningResources: [
     {
-      title: 'OpenSphere AI Hub tutorial',
+      title: 'AI Workbench tutorial',
       provider: 'OpenSphere',
       type: 'Tutorial',
       duration: '30 minutes',
@@ -2413,7 +2419,7 @@ const DEFAULT_SUMMARY: SummaryResponse = {
       provider: 'Platform team',
       type: 'Documentation',
       duration: 'Reference',
-      description: 'Source attribution, tool claims, trace policies, and runtime boundaries for OpenSphere AI Hub agents.',
+      description: 'Source attribution, tool claims, trace policies, and runtime boundaries for AI Workbench agents.',
       href: '#',
     },
     {
@@ -2451,10 +2457,10 @@ function phaseClass(phase: string): string {
   styleUrls: ['./app.component.css'],
   template: `
     <div class="ai-shell">
-      <clr-vertical-nav class="ai-nav" [clrVerticalNavCollapsible]="false" aria-label="OpenSphere AI Hub navigation">
+      <clr-vertical-nav class="ai-nav" [clrVerticalNavCollapsible]="false" aria-label="AI Workbench navigation">
         <div class="ai-brand">
           <div>
-            <strong>OpenSphere AI Hub</strong>
+            <strong>AI Workbench</strong>
             <span class="label label-info">Angular</span>
           </div>
         </div>
@@ -2492,14 +2498,14 @@ function phaseClass(phase: string): string {
         <nav class="ai-breadcrumb" aria-label="breadcrumb">
           <a class="ai-breadcrumb-link" href="/">OpenSphere</a>
           <span class="ai-breadcrumb-separator">/</span>
-          <a class="ai-breadcrumb-link" href="/p/ai" (click)="navigate('home', $event)">OpenSphere AI Hub</a>
+          <a class="ai-breadcrumb-link" [href]="pageHref('home')" (click)="navigate('home', $event)">AI Workbench</a>
           <span class="ai-breadcrumb-separator">/</span>
           <span class="ai-breadcrumb-current">{{ pageLabel() }}</span>
         </nav>
 
         <header class="ai-header">
           <div>
-            <p class="ai-eyebrow">OPENSPHERE AI HUB</p>
+            <p class="ai-eyebrow">AI WORKBENCH</p>
             <div class="ai-title-row">
               <h1>{{ pageLabel() }}</h1>
               <span class="label label-info">Angular - Clarity</span>
@@ -2515,7 +2521,7 @@ function phaseClass(phase: string): string {
         </header>
 
         @if (summary().alerts.length) {
-          <section class="ai-alerts" aria-label="OpenSphere AI Hub alerts">
+          <section class="ai-alerts" aria-label="AI Workbench alerts">
             @for (alert of summary().alerts; track alert.message) {
               <clr-alert [clrAlertType]="alertType(alert.severity)" [clrAlertClosable]="false">
                 <clr-alert-item>
@@ -2527,7 +2533,7 @@ function phaseClass(phase: string): string {
         }
 
         @if (actionMessage(); as message) {
-          <section class="ai-alerts" aria-label="OpenSphere AI Hub action result">
+          <section class="ai-alerts" aria-label="AI Workbench action result">
             <clr-alert [clrAlertType]="message.type" [clrAlertClosable]="false">
               <clr-alert-item>
                 <span class="alert-text">{{ message.message }}</span>
@@ -3262,13 +3268,13 @@ function phaseClass(phase: string): string {
               </clr-tabs>
               <div class="card ai-action-panel" [class.ai-tab-hidden]="clusterSettingsTab() !== 'foundation'">
                 <div class="card-header">
-                  <div class="card-title">OAH foundation services</div>
+                  <div class="card-title">AI Workbench foundation services</div>
                 </div>
                 <div class="card-block">
                   <div class="ai-section-header">
                     <div>
                       <h3 class="ai-panel-title">Backbone-backed service availability</h3>
-                      <p class="ai-footnote">Tracks the services still required around Backbone PostgreSQL, RustFS, and Gitea before OAH metadata services, KServe artifacts, KFP artifacts, Model Registry, TrustyAI, and distributed workloads can run.</p>
+                      <p class="ai-footnote">Tracks the services still required around Backbone PostgreSQL, RustFS, and Gitea before AI Workbench metadata services, KServe artifacts, KFP artifacts, Model Registry, TrustyAI, and distributed workloads can run.</p>
                     </div>
                     <div class="ai-action-row">
                       <span [class]="'label ' + statusClass(foundationServices().phase)">{{ foundationServices().phase }}</span>
@@ -3335,7 +3341,7 @@ function phaseClass(phase: string): string {
               </div>
               <div class="card ai-action-panel" [class.ai-tab-hidden]="clusterSettingsTab() !== 'support'">
                 <div class="card-header">
-                  <div class="card-title">OAH support services</div>
+                  <div class="card-title">AI Workbench support services</div>
                 </div>
                 <div class="card-block">
                   <div class="ai-section-header">
@@ -3369,8 +3375,8 @@ function phaseClass(phase: string): string {
                   <div class="ai-gpu-config-panel" [hidden]="!supportServices().productFlow">
                     <div class="ai-section-header">
                       <div>
-                        <h3 class="ai-panel-title">OAH product flow readiness</h3>
-                        <p class="ai-footnote">Tracks the live OpenSphere AI Hub user flow across training, KFP pipeline execution, pgvector memory, model registry, KServe serving, and monitoring. This is separate from full ODH/RHOAI upstream parity.</p>
+                        <h3 class="ai-panel-title">AI Workbench product flow readiness</h3>
+                        <p class="ai-footnote">Tracks the live AI Workbench user flow across training, KFP pipeline execution, pgvector memory, model registry, KServe serving, and monitoring. This is separate from full ODH/RHOAI upstream parity.</p>
                       </div>
                       <div class="ai-action-row">
                         <span [class]="'label ' + statusClass(supportServices().productFlow?.phase || '')">{{ supportServices().productFlow?.phase }}</span>
@@ -3502,14 +3508,14 @@ function phaseClass(phase: string): string {
                       <div class="ai-section-header">
                         <div>
                           <h3 class="ai-panel-title">Console Backbone provider</h3>
-                          <p class="ai-footnote">Backbone provides PostgreSQL, RustFS, and Gitea for portable OAH metadata, artifacts, and config-as-code expansion without depending on environment-specific external services.</p>
+                          <p class="ai-footnote">Backbone provides PostgreSQL, RustFS, and Gitea for portable AI Workbench metadata, artifacts, and config-as-code expansion without depending on environment-specific external services.</p>
                         </div>
                         <div class="ai-action-row">
                           <span [class]="'label ' + statusClass(backbone.phase)">{{ backbone.phase }}</span>
                           <span class="label label-info">{{ backbone.namespace }}</span>
                           <button type="button" class="btn btn-sm btn-outline" [disabled]="!backbone.ready" (click)="applyBackboneDefaults()">Use Backbone defaults</button>
-                          <button type="button" class="btn btn-sm btn-outline" [disabled]="saving()" (click)="previewBackboneClaim()">Preview OAH claim</button>
-                          <button type="button" class="btn btn-sm btn-primary" [disabled]="saving()" (click)="applyBackboneClaim()">Apply OAH claim</button>
+                          <button type="button" class="btn btn-sm btn-outline" [disabled]="saving()" (click)="previewBackboneClaim()">Preview AI Workbench claim</button>
+                          <button type="button" class="btn btn-sm btn-primary" [disabled]="saving()" (click)="applyBackboneClaim()">Apply AI Workbench claim</button>
                           <button type="button" class="btn btn-sm btn-outline" [disabled]="saving()" (click)="previewBackboneBindings()">Preview bindings</button>
                           <button type="button" class="btn btn-sm btn-primary" [disabled]="saving() || (backbone.consumer?.bindings?.postgresSecretReady !== true && backbone.consumer?.bindings?.rustfsSecretReady !== true)" (click)="applyBackboneBindings()">Bind issued Secrets</button>
                           <button type="button" class="btn btn-sm btn-link" (click)="openConfigurationPage('/backbone', $event)">Open Backbone</button>
@@ -3838,7 +3844,7 @@ function phaseClass(phase: string): string {
                     <div class="ai-section-header">
                       <div>
                         <h3 class="ai-panel-title">Metadata credential bootstrap</h3>
-                        <p class="ai-footnote">Registers PostgreSQL credentials for DSPA/KFP runtime metadata, OAH native pipeline metadata, Model Registry, and TrustyAI.</p>
+                        <p class="ai-footnote">Registers PostgreSQL credentials for DSPA/KFP runtime metadata, AI Workbench native pipeline metadata, Model Registry, and TrustyAI.</p>
                       </div>
                       <div class="ai-action-row">
                         @if (metadataBootstrap()) {
@@ -4586,7 +4592,7 @@ function phaseClass(phase: string): string {
                     <div>
                       <p class="ai-eyebrow">COMPUTEBACKEND TARGET</p>
                       <h3 class="ai-gpu-heading">{{ gpuEnablementPlan()?.resourceName || gpuEnablementConfig().resourceName }}</h3>
-                      <p class="ai-footnote">{{ gpuEnablementPlan()?.summary || 'Choose how OAH should attach compute for training, inference, notebook, and demo workloads.' }}</p>
+                      <p class="ai-footnote">{{ gpuEnablementPlan()?.summary || 'Choose how AI Workbench should attach compute for training, inference, notebook, and demo workloads.' }}</p>
                     </div>
                     <div class="ai-gpu-health">
                       <span [class]="'label ' + statusClass(gpuInventory().phase)">{{ gpuInventory().phase }}</span>
@@ -4616,7 +4622,7 @@ function phaseClass(phase: string): string {
                     </div>
                   </div>
                   <h3 class="ai-panel-title">Compute Backend service catalog</h3>
-                  <p class="ai-footnote">These are not mutually exclusive choices. OAH can register several services, then route training, serving, notebook, batch, and fallback work to the active backend for each situation.</p>
+                  <p class="ai-footnote">These are not mutually exclusive choices. AI Workbench can register several services, then route training, serving, notebook, batch, and fallback work to the active backend for each situation.</p>
                   <div class="ai-gpu-catalog-grid">
                     @for (service of gpuServiceCatalog(); track service.id) {
                       <article class="ai-gpu-option" [class.ai-gpu-option-active]="service.selected" [class.ai-gpu-option-aux]="!service.selectable">
@@ -4763,7 +4769,7 @@ function phaseClass(phase: string): string {
                         <clr-input-container>
                           <label>{{ gpuEnablementProfile() === 'colab' ? 'Bridge endpoint' : 'Service endpoint' }}</label>
                           <input clrInput name="gpuExternalEndpointTop" placeholder="https://gpu.example.internal" [value]="gpuEnablementConfig().externalEndpoint" (input)="setGpuEnablementConfigField('externalEndpoint', $any($event.target).value)" />
-                          <clr-control-helper>{{ gpuEnablementProfile() === 'colab' ? 'OpenSphere bridge endpoint that can control a notebook runtime and report job status.' : 'Reachable compute service endpoint that implements the OAH bridge contract.' }}</clr-control-helper>
+                          <clr-control-helper>{{ gpuEnablementProfile() === 'colab' ? 'OpenSphere bridge endpoint that can control a notebook runtime and report job status.' : 'Reachable compute service endpoint that implements the AI Workbench bridge contract.' }}</clr-control-helper>
                         </clr-input-container>
                         <clr-input-container>
                           <label>Credential Secret</label>
@@ -4784,7 +4790,7 @@ function phaseClass(phase: string): string {
                         <div class="ai-section-header">
                           <div>
                             <h3 class="ai-panel-title">External bridge verification</h3>
-                            <p class="ai-footnote">OAH calls the selected endpoint through the server, reads the token from the configured Secret, and reports the GPU service response here.</p>
+                            <p class="ai-footnote">AI Workbench calls the selected endpoint through the server, reads the token from the configured Secret, and reports the GPU service response here.</p>
                           </div>
                           @if (gpuBridgeProbe()) {
                             <span [class]="'label ' + statusClass(gpuBridgeProbe()?.phase || 'Pending')">{{ gpuBridgeProbe()?.phase }}</span>
@@ -4906,7 +4912,7 @@ function phaseClass(phase: string): string {
                       <div class="ai-section-header">
                         <div>
                           <h3 class="ai-panel-title">Workload routing</h3>
-                          <p class="ai-footnote">Choose which registered backend OAH should use for each workload type. This is the operational destination of the service catalog above.</p>
+                          <p class="ai-footnote">Choose which registered backend AI Workbench should use for each workload type. This is the operational destination of the service catalog above.</p>
                         </div>
                         <div class="ai-action-row">
                           <span [class]="'label ' + statusClass(computeRouting().phase)">{{ computeRouting().phase }}</span>
@@ -5182,7 +5188,7 @@ function phaseClass(phase: string): string {
                       <clr-input-container>
                         <label>{{ gpuEnablementProfile() === 'colab' ? 'Bridge endpoint' : 'Service endpoint' }}</label>
                         <input clrInput name="gpuExternalEndpoint" [value]="gpuEnablementConfig().externalEndpoint" (input)="setGpuEnablementConfigField('externalEndpoint', $any($event.target).value)" />
-                        <clr-control-helper>{{ gpuEnablementProfile() === 'colab' ? 'OpenSphere bridge endpoint that can control a notebook runtime and report job status.' : 'Reachable compute service endpoint that implements the OAH bridge contract.' }}</clr-control-helper>
+                          <clr-control-helper>{{ gpuEnablementProfile() === 'colab' ? 'OpenSphere bridge endpoint that can control a notebook runtime and report job status.' : 'Reachable compute service endpoint that implements the AI Workbench bridge contract.' }}</clr-control-helper>
                       </clr-input-container>
                       <clr-input-container>
                         <label>Credential Secret</label>
@@ -5259,7 +5265,7 @@ function phaseClass(phase: string): string {
               </div>
               <div class="card ai-action-panel" [class.ai-tab-hidden]="clusterSettingsTab() !== 'demo'">
                 <div class="card-header">
-                  <div class="card-title">OAH lifecycle demo plan</div>
+                  <div class="card-title">AI Workbench lifecycle demo plan</div>
                 </div>
                 <div class="card-block">
                   <div class="ai-label-row ai-backend-summary">
@@ -5561,7 +5567,7 @@ function phaseClass(phase: string): string {
                   </table>
                   <table class="table table-compact ai-mini-table">
                     <thead>
-                      <tr><th>Stage</th><th>Task</th><th>OAH area</th><th>Resources</th><th>Status</th><th>Expected result</th></tr>
+                      <tr><th>Stage</th><th>Task</th><th>AI Workbench area</th><th>Resources</th><th>Status</th><th>Expected result</th></tr>
                     </thead>
                     <tbody>
                       @for (task of oahDemoPlan().tasks; track task.id) {
@@ -5937,7 +5943,7 @@ function phaseClass(phase: string): string {
             @if (loadingResource()) {
               <clr-alert clrAlertType="info" [clrAlertClosable]="false">
                 <clr-alert-item>
-                  <span class="alert-text">Loading data from OpenSphere AI Hub APIs...</span>
+                  <span class="alert-text">Loading data from AI Workbench APIs...</span>
                 </clr-alert-item>
               </clr-alert>
             } @else {
@@ -6862,7 +6868,7 @@ export class AppComponent implements OnInit, OnDestroy {
   readonly inferenceDetail = signal<InferenceDetailResponse | null>(null);
   readonly dataConnectionDetail = signal<DataConnectionDetailResponse | null>(null);
   readonly vectorMemory = signal<VectorMemoryResponse | null>(null);
-  readonly vectorQueryText = signal('OpenSphere AI Hub model registry and object storage');
+  readonly vectorQueryText = signal('AI Workbench model registry and object storage');
   readonly vectorQueryResult = signal<VectorQueryResponse | null>(null);
   readonly vectorAclOwner = signal('');
   readonly vectorAclGroups = signal('');
@@ -6916,7 +6922,7 @@ export class AppComponent implements OnInit, OnDestroy {
   readonly gpuBridgeProbe = signal<GpuBridgeProbeResponse | null>(null);
   readonly gpuBridgeProbeLog = signal('');
   readonly computeRouting = signal<ComputeRoutingResponse>({ namespace: 'opensphere-system', name: 'oah-compute-routing', phase: 'Pending', ready: false, options: [], routes: [] });
-  readonly oahDemoPlan = signal<OahDemoPlanResponse>({ title: 'OpenSphere AI Hub GPU lifecycle demo', acronym: 'OAH', phase: 'Pending', generatedAt: '', summary: '', prerequisites: [], evidence: [], tasks: [] });
+  readonly oahDemoPlan = signal<OahDemoPlanResponse>({ title: 'AI Workbench GPU lifecycle demo', acronym: 'AIW', phase: 'Pending', generatedAt: '', summary: '', prerequisites: [], evidence: [], tasks: [] });
   readonly demoRunNamespace = signal('oah-gpu-lifecycle-demo');
   readonly oahDemoRun = signal<DemoRunStatusResponse>({ namespace: 'oah-gpu-lifecycle-demo', phase: 'NotStarted', generatedAt: '', summary: { expected: 0, actual: 0, ready: 0, missingCrds: 0 }, items: [] });
   readonly oahDemoPreview = signal<DemoRunPreviewResponse | null>(null);
@@ -6990,7 +6996,7 @@ export class AppComponent implements OnInit, OnDestroy {
       label: 'Model API Router / LiteLLM route',
       mode: 'model-api-router',
       resourceName: 'llm-route.opensphere.io',
-      summary: 'Use this when the model is already running elsewhere and OAH only needs to route inference API calls.',
+      summary: 'Use this when the model is already running elsewhere and AI Workbench only needs to route inference API calls.',
       category: 'AI service',
       serviceRole: 'Separate service',
       workloads: 'Inference API routing, model list, completion tests',
@@ -7026,6 +7032,7 @@ export class AppComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     if (typeof window !== 'undefined') {
+      this.applyRouteFromLocation();
       const routing = this.hostRouting();
       if (routing) this.routeUnsubscribe = routing.subscribe(() => this.applyRouteFromLocation());
       else window.addEventListener('popstate', this.popStateHandler);
@@ -7378,7 +7385,8 @@ export class AppComponent implements OnInit, OnDestroy {
     const uiRoute = String(route || '')
       .replace(/^https?:\/\/[^/]+/i, '')
       .replace(/^\/+/, '')
-      .replace(/^p\/ai\/?/, '') // 표준 접두사(/p/ai/...)
+      .replace(/^p\/ai-workbench\/?/, '') // 정본 접두사(/p/ai-workbench/...)
+      .replace(/^p\/ai\/?/, '') // 구형 접두사(/p/ai/...)
       .replace(/^ai\/?/, ''); // 구형 bare 접두사(/ai/...) — 하위호환
     const clusterBase = PAGE_ROUTE['cluster-settings'];
     if (uiRoute === clusterBase || uiRoute.startsWith(`${clusterBase}/`)) {
@@ -7416,7 +7424,7 @@ export class AppComponent implements OnInit, OnDestroy {
   private routeUrl(page: PageId, tab = this.clusterSettingsTab()): string {
     const route = PAGE_ROUTE[page];
     const tabRoute = page === 'cluster-settings' && tab !== 'setup' ? `/${CLUSTER_SETTINGS_TAB_ROUTE[tab]}` : '';
-    const basePath = this.hostRouting()?.basePath || '/p/ai';
+    const basePath = this.hostRouting()?.basePath || '/p/ai-workbench';
     return route ? `${basePath}/${route}${tabRoute}` : basePath;
   }
 
@@ -7432,11 +7440,17 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   private applyRouteFromLocation(): void {
+    const route = this.currentUiRoute();
     const page = this.initialPage();
     if (page === 'cluster-settings') {
       this.clusterSettingsTab.set(this.initialClusterSettingsTab());
     }
     this.setActivePage(page, false);
+    const legacyBase = typeof window !== 'undefined'
+      && (window.location.pathname === '/p/ai' || window.location.pathname.startsWith('/p/ai/'));
+    if (legacyBase || LEGACY_PAGE_ROUTE[route]) {
+      this.writeRoute(page, false);
+    }
   }
 
   openCreate(): void {
@@ -8346,7 +8360,7 @@ export class AppComponent implements OnInit, OnDestroy {
       const result = data as BackboneClaimApplyResponse;
       this.backboneClaimApply.set(result);
       if (result.supportServices) this.supportServices.set(result.supportServices);
-      this.actionMessage.set({ type: 'success', message: 'OAH BackboneClaim was applied. Wait for PostgreSQL and RustFS Secrets to be issued, then bind them.' });
+      this.actionMessage.set({ type: 'success', message: 'AI Workbench BackboneClaim was applied. Wait for PostgreSQL and RustFS Secrets to be issued, then bind them.' });
       await this.fetchSummary();
     } catch (error) {
       this.actionMessage.set({ type: 'danger', message: error instanceof Error ? error.message : String(error) });
@@ -8397,7 +8411,7 @@ export class AppComponent implements OnInit, OnDestroy {
       this.backboneBindingsApply.set(result);
       if (result.supportServices) this.supportServices.set(result.supportServices);
       const partial = result.phase === 'PartialConfigured' && result.missing?.objectStoreSecret;
-      this.actionMessage.set({ type: partial ? 'info' : 'success', message: partial ? 'Backbone PostgreSQL was bound. RustFS object storage binding is waiting for ai-hub-backbone-rustfs.' : 'Backbone-issued PostgreSQL and RustFS Secrets were bound to OAH support services.' });
+      this.actionMessage.set({ type: partial ? 'info' : 'success', message: partial ? 'Backbone PostgreSQL was bound. RustFS object storage binding is waiting for ai-hub-backbone-rustfs.' : 'Backbone-issued PostgreSQL and RustFS Secrets were bound to AI Workbench support services.' });
       await this.fetchSummary();
     } catch (error) {
       this.actionMessage.set({ type: 'danger', message: error instanceof Error ? error.message : String(error) });
@@ -8498,7 +8512,7 @@ export class AppComponent implements OnInit, OnDestroy {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || data.message || `Compute routing save failed with HTTP ${res.status}`);
       this.computeRouting.set(data as ComputeRoutingResponse);
-      this.actionMessage.set({ type: 'success', message: 'OAH workload routing saved.' });
+      this.actionMessage.set({ type: 'success', message: 'AI Workbench workload routing saved.' });
       await this.loadComputeBackends();
     } catch (error) {
       this.actionMessage.set({ type: 'danger', message: error instanceof Error ? error.message : String(error) });
@@ -8645,7 +8659,7 @@ export class AppComponent implements OnInit, OnDestroy {
     try {
       const res = await this.hostFetch(`${this.apiBase}/admin/native/demo-plan`, { headers: this.actionHeaders() });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `OAH demo plan failed with HTTP ${res.status}`);
+      if (!res.ok) throw new Error(data.error || `AI Workbench demo plan failed with HTTP ${res.status}`);
       this.oahDemoPlan.set(data as OahDemoPlanResponse);
       if (data.gpu) this.gpuInventory.set(data.gpu as GpuInventoryResponse);
     } catch (error) {
@@ -8658,7 +8672,7 @@ export class AppComponent implements OnInit, OnDestroy {
       const params = new URLSearchParams({ namespace: this.demoRunNamespace() });
       const res = await this.hostFetch(`${this.apiBase}/admin/native/demo-run?${params.toString()}`, { headers: this.actionHeaders() });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `OAH demo run status failed with HTTP ${res.status}`);
+      if (!res.ok) throw new Error(data.error || `AI Workbench demo run status failed with HTTP ${res.status}`);
       this.oahDemoRun.set(data as DemoRunStatusResponse);
     } catch (error) {
       this.actionMessage.set({ type: 'danger', message: error instanceof Error ? error.message : String(error) });
@@ -8670,7 +8684,7 @@ export class AppComponent implements OnInit, OnDestroy {
       const params = new URLSearchParams({ namespace: this.demoRunNamespace() });
       const res = await this.hostFetch(`${this.apiBase}/admin/native/demo-run/preview?${params.toString()}`, { headers: this.actionHeaders() });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `OAH demo preview failed with HTTP ${res.status}`);
+      if (!res.ok) throw new Error(data.error || `AI Workbench demo preview failed with HTTP ${res.status}`);
       this.oahDemoPreview.set(data as DemoRunPreviewResponse);
       this.demoManifestPreview.set(JSON.stringify(data.manifests || [], null, 2));
     } catch (error) {
@@ -8683,7 +8697,7 @@ export class AppComponent implements OnInit, OnDestroy {
       const params = new URLSearchParams({ namespace: this.demoRunNamespace() });
       const res = await this.hostFetch(`${this.apiBase}/admin/native/demo-run/evidence?${params.toString()}`, { headers: this.actionHeaders() });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `OAH demo evidence failed with HTTP ${res.status}`);
+      if (!res.ok) throw new Error(data.error || `AI Workbench demo evidence failed with HTTP ${res.status}`);
       this.oahDemoEvidence.set(data as DemoRunEvidenceResponse);
     } catch (error) {
       this.actionMessage.set({ type: 'danger', message: error instanceof Error ? error.message : String(error) });
@@ -8695,7 +8709,7 @@ export class AppComponent implements OnInit, OnDestroy {
       const params = new URLSearchParams({ namespace: this.demoRunNamespace() });
       const res = await this.hostFetch(`${this.apiBase}/admin/native/demo-smoke?${params.toString()}`, { headers: this.actionHeaders() });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `OAH smoke status failed with HTTP ${res.status}`);
+      if (!res.ok) throw new Error(data.error || `AI Workbench smoke status failed with HTTP ${res.status}`);
       this.oahDemoSmoke.set(data as DemoSmokeStatusResponse);
     } catch (error) {
       this.actionMessage.set({ type: 'danger', message: error instanceof Error ? error.message : String(error) });
@@ -8707,7 +8721,7 @@ export class AppComponent implements OnInit, OnDestroy {
       const params = new URLSearchParams({ namespace: this.demoRunNamespace() });
       const res = await this.hostFetch(`${this.apiBase}/admin/native/demo-smoke/logs?${params.toString()}`, { headers: this.actionHeaders() });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `OAH smoke logs failed with HTTP ${res.status}`);
+      if (!res.ok) throw new Error(data.error || `AI Workbench smoke logs failed with HTTP ${res.status}`);
       this.oahDemoSmokeLogs.set(data as DemoSmokeLogsResponse);
       this.smokeLogPreview.set(JSON.stringify(data.items || [], null, 2));
     } catch (error) {
@@ -8720,7 +8734,7 @@ export class AppComponent implements OnInit, OnDestroy {
       const params = new URLSearchParams({ namespace: this.demoRunNamespace() });
       const res = await this.hostFetch(`${this.apiBase}/admin/native/demo-smoke/preview?${params.toString()}`, { headers: this.actionHeaders() });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `OAH smoke preview failed with HTTP ${res.status}`);
+      if (!res.ok) throw new Error(data.error || `AI Workbench smoke preview failed with HTTP ${res.status}`);
       this.oahDemoSmokePreview.set(data as DemoSmokePreviewResponse);
       this.smokeManifestPreview.set(JSON.stringify(data.manifests || [], null, 2));
     } catch (error) {
@@ -8739,9 +8753,9 @@ export class AppComponent implements OnInit, OnDestroy {
         body: JSON.stringify({ namespace: this.demoRunNamespace() }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || data.message || `OAH smoke run failed with HTTP ${res.status}`);
+      if (!res.ok) throw new Error(data.error || data.message || `AI Workbench smoke run failed with HTTP ${res.status}`);
       this.oahDemoSmoke.set((data.status || data) as DemoSmokeStatusResponse);
-      this.actionMessage.set({ type: data.summary?.failed ? 'warning' : 'success', message: `OAH smoke demo started: ${data.summary?.created || 0} job(s), ${data.summary?.skipped || 0} skipped.` });
+      this.actionMessage.set({ type: data.summary?.failed ? 'warning' : 'success', message: `AI Workbench smoke demo started: ${data.summary?.created || 0} job(s), ${data.summary?.skipped || 0} skipped.` });
       await Promise.all([this.loadOahDemoSmoke(), this.loadOahDemoSmokeLogs(), this.loadOahDemoEvidence(), this.loadControllerMetrics(), this.loadAuditLog(), this.loadFinalReadiness()]);
     } catch (error) {
       this.actionMessage.set({ type: 'danger', message: error instanceof Error ? error.message : String(error) });
@@ -8761,9 +8775,9 @@ export class AppComponent implements OnInit, OnDestroy {
         body: JSON.stringify({ namespace: this.demoRunNamespace() }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || data.message || `OAH demo run failed with HTTP ${res.status}`);
+      if (!res.ok) throw new Error(data.error || data.message || `AI Workbench demo run failed with HTTP ${res.status}`);
       this.oahDemoRun.set(data as DemoRunStatusResponse);
-      this.actionMessage.set({ type: data.summary?.failed ? 'warning' : 'success', message: `OAH demo run completed: ${data.summary?.created || 0} created, ${data.summary?.updated || 0} updated, ${data.summary?.skipped || 0} skipped.` });
+      this.actionMessage.set({ type: data.summary?.failed ? 'warning' : 'success', message: `AI Workbench demo run completed: ${data.summary?.created || 0} created, ${data.summary?.updated || 0} updated, ${data.summary?.skipped || 0} skipped.` });
       await Promise.all([this.fetchSummary(), this.fetchResourcePage(this.activePage()), this.loadOahDemoPlan(), this.loadGpuInventory(), this.loadOahDemoEvidence(), this.loadOahDemoSmoke(), this.loadOahDemoSmokeLogs(), this.loadControllerMetrics(), this.loadAuditLog(), this.loadFinalReadiness()]);
       this.oahDemoRun.set(data as DemoRunStatusResponse);
     } catch (error) {
@@ -8784,11 +8798,11 @@ export class AppComponent implements OnInit, OnDestroy {
         body: JSON.stringify({ namespace: this.demoRunNamespace() }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || data.message || `OAH demo reset failed with HTTP ${res.status}`);
+      if (!res.ok) throw new Error(data.error || data.message || `AI Workbench demo reset failed with HTTP ${res.status}`);
       this.oahDemoRun.set(data as DemoRunStatusResponse);
       this.demoManifestPreview.set('');
       this.oahDemoPreview.set(null);
-      this.actionMessage.set({ type: data.summary?.failed ? 'warning' : 'success', message: `OAH demo reset completed: ${data.summary?.deleted || 0} deleted, ${data.summary?.notFound || 0} already absent, ${data.summary?.failed || 0} failed.` });
+      this.actionMessage.set({ type: data.summary?.failed ? 'warning' : 'success', message: `AI Workbench demo reset completed: ${data.summary?.deleted || 0} deleted, ${data.summary?.notFound || 0} already absent, ${data.summary?.failed || 0} failed.` });
       await Promise.all([this.fetchSummary(), this.fetchResourcePage(this.activePage()), this.loadOahDemoRun(), this.loadOahDemoEvidence(), this.loadOahDemoSmoke(), this.loadOahDemoSmokeLogs(), this.loadControllerMetrics(), this.loadAuditLog(), this.loadFinalReadiness()]);
     } catch (error) {
       this.actionMessage.set({ type: 'danger', message: error instanceof Error ? error.message : String(error) });
@@ -9408,6 +9422,8 @@ export class AppComponent implements OnInit, OnDestroy {
   private initialPage(): PageId {
     if (typeof window === 'undefined') return 'home';
     const route = this.currentUiRoute();
+    const legacyPage = LEGACY_PAGE_ROUTE[route];
+    if (legacyPage) return legacyPage;
     const match = Object.entries(PAGE_ROUTE)
       .filter(([, value]) => value && (route === value || route.startsWith(`${value}/`)))
       .sort((a, b) => b[1].length - a[1].length)[0];
@@ -9430,9 +9446,11 @@ export class AppComponent implements OnInit, OnDestroy {
     if (typeof window === 'undefined') return '';
     const path = this.hostRouting()?.currentPath() || window.location.pathname;
     const pathname = new URL(path, window.location.origin).pathname;
-    const basePath = this.hostRouting()?.basePath || '/p/ai';
+    const basePath = this.hostRouting()?.basePath || '/p/ai-workbench';
     if (pathname === basePath) return '';
     if (pathname.startsWith(`${basePath}/`)) return pathname.slice(basePath.length + 1);
+    if (pathname === '/p/ai') return '';
+    if (pathname.startsWith('/p/ai/')) return pathname.slice('/p/ai/'.length);
     return pathname.split('/').filter(Boolean).join('/');
   }
 

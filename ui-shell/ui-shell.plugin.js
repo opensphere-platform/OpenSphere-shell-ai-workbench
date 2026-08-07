@@ -1,6 +1,6 @@
 // OpenSphere AI — CONSTITUTION-0003 Production subShell reference adapter.
 const TAG = 'osp-ai-shell';
-const RELEASE = '1.1.0';
+const RELEASE = '1.1.1';
 // Host-owned module identity. The Main Shell mounts the subShell at /p/<pluginId>
 // and proxies /api/plugins/<pluginId>, so nothing below may hardcode a route.
 const PLUGIN_ID = 'ai-workbench';
@@ -26,16 +26,7 @@ function injectOnce(base) {
 
 function navigationFor(routeBase) {
   return [
-    { id: 'ai-operate', label: 'AI Operations', children: [
-      { id: 'ai-overview', label: 'Overview', route: routeBase },
-      { id: 'ai-workbenches', label: 'Workbenches', route: `${routeBase}/workbenches` },
-      { id: 'ai-pipelines', label: 'Pipelines', route: `${routeBase}/pipelines` },
-      { id: 'ai-training', label: 'Training', route: `${routeBase}/training/jobs` },
-      { id: 'ai-models', label: 'Models', route: `${routeBase}/models/registry` },
-      { id: 'ai-inference', label: 'Inference', route: `${routeBase}/inference` },
-      { id: 'ai-evaluation', label: 'Evaluation', route: `${routeBase}/evaluation/jobs` },
-      { id: 'ai-monitoring', label: 'Monitoring', route: `${routeBase}/monitoring/trustyai` },
-    ] },
+    { id: PLUGIN_ID, label: 'AI Workbench', route: routeBase },
   ];
 }
 
@@ -48,7 +39,7 @@ async function contributeManual(ctx, routeBase) {
   const content = await response.text();
   ctx.extensions.manual.contribute({
     sourceId: 'opensphere-ai-hub',
-    title: 'OpenSphere AI Hub',
+    title: 'AI Workbench',
     locale: 'ko-KR',
     route: routeBase,
     sourcePath: 'ui-shell/manual/ai.ko.md',
@@ -64,7 +55,7 @@ export async function activate(ctx) {
   const contexts = window.__OPENSPHERE_HOST_CONTEXTS__ ||= Object.create(null);
   contexts[PLUGIN_ID] = { api: { baseUrl: base, fetch: ctx.api?.fetch }, routing: ctx.routing };
   injectOnce(base);
-  ctx.extensions.registerPage?.({ id: ctx.pluginId, title: 'OpenSphere AI Hub', navBand: 'Operate', elementTag: TAG });
+  ctx.extensions.registerPage?.({ id: ctx.pluginId, title: 'AI Workbench', navBand: 'Operate', elementTag: TAG });
   ctx.extensions.nav?.contribute(navigationFor(routeBase));
   ctx.extensions.search?.contribute({
     async query(q) {
@@ -76,7 +67,7 @@ export async function activate(ctx) {
   });
   await contributeManual(ctx, routeBase);
   ctx.notify?.publish({
-    title: 'OpenSphere AI Hub ready',
+    title: 'AI Workbench ready',
     detail: 'Production subShell capabilities are connected to the Main Shell.',
     severity: 'success',
     persistent: false,
