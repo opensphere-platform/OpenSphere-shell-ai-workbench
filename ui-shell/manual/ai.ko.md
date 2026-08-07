@@ -1,12 +1,12 @@
-# AI Workbench
+# AI-Workbench
 
-AI Workbench는 Workbench, Pipeline, Training, Model Registry, Inference, Evaluation,
+AI-Workbench는 Workbench, Pipeline, Training, Model Registry, Inference, Evaluation,
 Monitoring을 하나의 AI 운영 도메인으로 제공합니다. Main Shell의 인증·권한·감사·검색·알림
 경계를 그대로 사용하며 별도 로그인이나 독립 전역 UI를 만들지 않습니다.
 
 ## 시작하기
 
-1. [AI Workbench 개요](/p/ai-workbench/overview)에서 기반 서비스와 최종 준비 상태를 확인합니다.
+1. [AI-Workbench 개요](/p/ai-workbench/overview)에서 기반 서비스와 최종 준비 상태를 확인합니다.
 2. [Workbenches](/p/ai-workbench/workbenches)에서 대화형 개발 환경을 준비합니다.
 3. [Pipelines](/p/ai-workbench/pipelines)와 [Training](/p/ai-workbench/pipelines/training-jobs)에서 학습 실행을 관리합니다.
 4. [Models](/p/ai-workbench/models/registry)에서 모델 버전과 승격 상태를 확인합니다.

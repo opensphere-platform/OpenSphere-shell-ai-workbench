@@ -1,7 +1,7 @@
 ARG OS_MODULE_DESCRIPTOR
 ARG OS_MODULE_SIGNATURE
 ARG OS_MODULE_KEY_ID=opensphere-plugins-v1
-ARG APP_VERSION=1.1.1
+ARG APP_VERSION=1.1.2
 ARG OS_RELEASE_TAG
 FROM docker.io/library/node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS build
 WORKDIR /app
@@ -20,7 +20,7 @@ ARG OS_RELEASE_TAG
 RUN apk upgrade --no-cache
 # CONSTITUTION-0005 §2.1 — org.opencontainers.image.version은 KST yyyyMMddHHmm 공식
 # version이고, SemVer 호환 버전은 io.opensphere.compatibility-version으로 분리한다.
-LABEL org.opencontainers.image.title="AI Workbench" \
+LABEL org.opencontainers.image.title="AI-Workbench" \
       org.opencontainers.image.version=$OS_RELEASE_TAG \
       org.opencontainers.image.source="https://github.com/opensphere-platform/OpenSphere-shell-ai-workbench" \
       io.opensphere.compatibility-version=$APP_VERSION \

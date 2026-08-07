@@ -1,6 +1,6 @@
 {
   "name": "ai-workbench",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "OpenSphere subShell — AI. Angular 22 + Clarity 18, exported as Angular Element <osp-ai-shell>. Standalone project: `ng build` → dist served by server.js (generic K8s proxy + WS exec).",
   "private": true,
   "scripts": {

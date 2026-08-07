@@ -1,4 +1,4 @@
-﻿apiVersion: plugins.opensphere.io/v1alpha1
+apiVersion: plugins.opensphere.io/v1alpha1
 kind: UIPluginPackage
 metadata:
   name: ai-workbench
@@ -8,9 +8,9 @@ spec:
   hostRef: main
   hostApiVersion: "1.0.0"
   hostCompat: ">=1.0.0 <2.0.0"
-  displayName: "AI Workbench"
+  displayName: "AI-Workbench"
   owner: platform-experience
-  version: 1.1.1
+  version: 1.1.2
   description: "CONSTITUTION-0003 Production subShell reference for OpenSphere AI operations"
   serviceAccountName: ai-runtime
   podLabels:
@@ -28,7 +28,7 @@ spec:
     digest: sha256:a65af5151f049ad3b1dbd070a2f7a05d89779226f8736814170ba11d32a9e613
   nav:
     band: "Operate"
-    label: "AI Workbench"
+    label: "AI-Workbench"
   manifest:
     path: /plugins/ui-shell.manifest.json
     sha256: "005111dfb5cb6b7d6348e8e921baa3ae8cf13aca58e8c776e61db1f4abb32b6a"
