@@ -12,7 +12,7 @@ OpenSphere AI Hub는 `OpenSphere-shell-template`의 Production subShell 기준�
 
 | 항목 | AI Hub 구현 |
 |---|---|
-| Canonical ID / host | `ai` / `main` |
+| Canonical ID / host | `ai-workbench` / `main` |
 | Page | `/p/ai-workbench/*` |
 | API | `/api/plugins/ai-workbench` |
 | CLI | `os ai` · `/admin/native/agent-tools` |
