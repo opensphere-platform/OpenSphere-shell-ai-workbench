@@ -437,11 +437,11 @@ async function main() {
 
     await waitForRuntime(client, `Boolean(customElements.get('osp-ai-shell'))`, 'custom element registration');
     await waitForRuntime(client, `Boolean(document.querySelector('osp-ai-shell'))`, 'AI shell element');
-    await waitForRuntime(client, `(document.body.innerText || '').includes('OAH support services')`, 'Support services tab');
+    await waitForRuntime(client, `(document.body.innerText || '').includes('AI-Workbench support services')`, 'Support services tab');
 
     const requiredTexts = [
-      'oah support services',
-      'oah product flow readiness',
+      'ai-workbench support services',
+      'ai-workbench product flow readiness',
       'gpu training smoke',
       'backbone pgvector memory',
       'kserve / knative serving',
@@ -452,7 +452,7 @@ async function main() {
       'datasciencecluster',
       'prerequisite services',
       'console backbone provider',
-      'apply oah claim',
+      'apply ai-workbench claim',
       'bind issued secrets',
       'preview pipelines foundation',
       'configure registry foundation',
@@ -479,7 +479,7 @@ async function main() {
     });
     const renderedValue = rendered.result.value;
     assert(renderedValue.missing.length === 0, `Missing rendered text: ${renderedValue.missing.join(', ')}`);
-    for (const label of ['Use Backbone defaults', 'Apply OAH claim', 'Bind issued Secrets', 'Preview pipelines foundation']) {
+    for (const label of ['Use Backbone defaults', 'Apply AI-Workbench claim', 'Bind issued Secrets', 'Preview pipelines foundation']) {
       const button = renderedValue.buttons.find((item) => item.text.includes(label));
       assert(button, `Button "${label}" was not rendered.`);
       assert(!button.disabled, `Button "${label}" was unexpectedly disabled.`);

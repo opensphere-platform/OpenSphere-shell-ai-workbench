@@ -1,15 +1,14 @@
 {
   "manifestVersion": 3,
   "kind": "subShell",
-  "id": "ai",
+  "id": "ai-workbench",
   "hostRef": "main",
   "hostApiVersion": "1.0.0",
   "hostCompat": ">=1.0.0 <2.0.0",
-  "version": "1.1.0-edge.1",
-  "title": "OpenSphere AI Hub",
-  "description": "OpenSphere OpenSphere AI Hub subShell.",
+  "version": "1.1.2",
+  "title": "AI-Workbench",
+  "description": "AI-Workbench subShell.",
   "entry": "ui-shell.plugin.js",
-  "entrySha256": "570ee7fb6db05a08045cd3cc6338abb16ce330bf42b06a8d405c85f9ba53a199",
   "shellCompat": ">=0.2.0 <0.9.0",
   "sdkVersion": "0.3.1",
   "permissions": [
@@ -22,10 +21,10 @@
   ],
   "nav": {
     "band": "Operate",
-    "label": "OpenSphere AI Hub"
+    "label": "AI-Workbench"
   },
   "designSystem": "clarity",
-  "apiBase": "/api/plugins/ai",
+  "apiBase": "/api/plugins/ai-workbench",
   "renderMode": "esm",
   "contributions": {
     "page": {
@@ -37,11 +36,11 @@
     },
     "api": {
       "enabled": true,
-      "basePath": "/api/plugins/ai"
+      "basePath": "/api/plugins/ai-workbench"
     },
     "cli": {
       "enabled": true,
-      "namespace": "ai",
+      "namespace": "ai-workbench",
       "manifestPath": "/admin/native/agent-tools"
     },
     "manual": {

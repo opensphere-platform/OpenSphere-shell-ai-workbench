@@ -1,5 +1,5 @@
 // AI — server.js. SDK 표준 subShell 피처 컨테이너: 제네릭 /api/k8s/* 프록시 + WS exec + Angular 범용콘솔(www) + subShell ui-shell 서빙.
-// 셸 nginx가 /api/plugins/ai/<X> → 이 서버 /<X> 로 prefix strip 프록시.
+// 셸 nginx가 /api/plugins/ai-workbench/<X> → 이 서버 /<X> 로 prefix strip 프록시.
 //   /plugins/*  → 매니페스트/번들/서명
 //   /app/*      → Angular dist(main.js, styles.css)
 //   /api/nodes  → 노드 집계
@@ -22,7 +22,10 @@ function tokenFromCookie(cookieHeader) {
 const PORT = process.env.PORT || 8080;
 const PLUGINS = process.env.PLUGINS_DIR || '/app/plugins';
 const WWW = process.env.WWW_DIR || '/app/www';
-const VERSION = process.env.APP_VERSION || '1.1.0-edge.1';
+const VERSION = process.env.APP_VERSION || '1.1.2';
+// Signed manifest id. The Main Shell proxies /api/plugins/<id> to this server,
+// so this must stay identical to ui-shell.manifest.source.json apiBase.
+const API_BASE = '/api/plugins/ai-workbench';
 const AI_DOMAIN_NAMESPACE = process.env.AI_DOMAIN_NAMESPACE || 'opensphere-system';
 const MANAGED_RUNTIME = process.env.OSP_AI_RUNTIME_MODE === 'managed';
 const WORKBENCH_IMAGE = process.env.WORKBENCH_IMAGE || (MANAGED_RUNTIME ? '' : 'localhost:5000/ai:workbench');
@@ -43,22 +46,12 @@ const ADMIN_GROUPS = (process.env.OSP_ADMIN_GROUPS || 'opensphere-console-admins
   .map((item) => item.trim())
   .filter(Boolean);
 
-// ── 쓰기 인가: 호출자 토큰을 검증 → Impersonate-User (SA 광범위 write 금지) ──
-// Kanidm 콘솔 id_token(ES256) 전용 — cutover 완료, 레거시 Keycloak RS256 dual-accept 경로는 제거됨.
-const { createHash, createPublicKey, randomBytes, randomUUID, verify: cryptoVerify } = require('crypto');
-// Kanidm 콘솔 IdP — split-horizon: 토큰 iss는 브라우저값(localhost:8444), JWKS는 in-cluster svc.
-const DEFAULT_KANIDM_ISSUERS = [
-  'https://localhost:8444/oauth2/openid/opensphere-console',
-  'https://auth.console.opensphere.dev/oauth2/openid/opensphere-console',
-];
-const KANIDM_ISSUERS = (process.env.KANIDM_ISSUERS || process.env.KANIDM_ISS || DEFAULT_KANIDM_ISSUERS.join(','))
-  .split(',')
-  .map((item) => item.trim())
-  .filter(Boolean);
-const KANIDM_JWKS_URL = process.env.KANIDM_JWKS_URL || 'https://opensphere-auth.opensphere-console-auth.svc:8443/oauth2/openid/opensphere-console/public_key.jwk';
-const KANIDM_TLS_SERVERNAME = process.env.KANIDM_TLS_SERVERNAME || 'kanidm.opensphere-console-auth.svc';
-const KANIDM_AZP = process.env.KANIDM_AZP || 'opensphere-console';
-const KANIDM_CA_PATH = process.env.KANIDM_CA_PATH || '/etc/kanidm-ca/ca.crt';
+// ── Console 신원 검증 ──
+// AI SubShell은 Supabase JWT 비밀이나 별도 JWKS 정책을 소유하지 않는다. Console Backend가
+// Supabase Auth 세션과 console.operator_role을 함께 검증하는 단일 identity authority다.
+const { createHash, randomBytes, randomUUID } = require('crypto');
+const CONSOLE_IDENTITY_URL = (process.env.CONSOLE_IDENTITY_URL
+  || 'http://opensphere-console-backend.opensphere-console.svc.cluster.local:8080').replace(/\/$/, '');
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const IDENTITY_GROUP_CLAIM_KEYS = ['groups', 'groups_name', 'group_names', 'roles'];
 const SERVICE = 'ai';
@@ -140,51 +133,28 @@ function standardLog(event) {
 function incrementMetric(map, key, amount = 1) {
   map.set(key, (map.get(key) || 0) + amount);
 }
-// Kanidm JWKS — 자체서명 CA를 명시적 'ca' 옵션으로 신뢰(TLS 검증 비활성화 금지, NODE_EXTRA_CA_CERTS 미접촉).
-let _kjwks = null, _kjwksAt = 0;
-const KJWKS_TTL = 5 * 60 * 1000;
-function _kanidmGetJwks(force) {
-  return new Promise((resolve, reject) => {
-    if (!force && _kjwks && (Date.now() - _kjwksAt) < KJWKS_TTL) return resolve(_kjwks);
-    const u = new URL(KANIDM_JWKS_URL);
-    const opts = { hostname: u.hostname, port: u.port || 443, path: u.pathname + u.search, method: 'GET', servername: KANIDM_TLS_SERVERNAME };
-    try { opts.ca = fs.readFileSync(KANIDM_CA_PATH); } catch (e) { console.error('[auth] kanidm CA read failed: ' + e); }
-    const rq = https.request(opts, (resp) => {
-      const ch = []; resp.on('data', (c) => ch.push(c));
-      resp.on('end', () => { try { const j = JSON.parse(Buffer.concat(ch).toString('utf8')); _kjwks = j.keys || (j.kty ? [j] : []); _kjwksAt = Date.now(); resolve(_kjwks); } catch (e) { reject(e); } });
+async function verifyToken(rawToken, identityFetch = fetch) {
+  if (!rawToken) throw { code: 401, msg: 'no bearer token' };
+  let response;
+  try {
+    response = await identityFetch(`${CONSOLE_IDENTITY_URL}/api/identity/session`, {
+      headers: { authorization: `Bearer ${rawToken}`, accept: 'application/json' },
+      signal: AbortSignal.timeout(3000),
     });
-    rq.on('error', reject); rq.end();
-  });
-}
-const b64urlJson = (s) => JSON.parse(Buffer.from(s, 'base64url').toString('utf8'));
-async function verifyToken(idToken) {
-  if (!idToken) throw { code: 401, msg: 'no id token' };
-  const parts = idToken.split('.');
-  if (parts.length !== 3) throw { code: 401, msg: 'malformed token' };
-  const header = b64urlJson(parts[0]);
-  const sig = Buffer.from(parts[2], 'base64url');
-  // ── Kanidm 콘솔 id_token (ES256) 전용 — alg pin (fail closed) ──
-  if (header.alg !== 'ES256') throw { code: 401, msg: 'unexpected alg' };
-  let jwk = (await _kanidmGetJwks()).find((k) => k.kid === header.kid);
-  if (!jwk) jwk = (await _kanidmGetJwks(true)).find((k) => k.kid === header.kid); // 키 롤오버 재시도
-  if (!jwk) throw { code: 401, msg: 'unknown kid (kanidm)' };
-  if (!jwk) throw { code: 401, msg: 'unknown kid (kanidm)' };
-  const pub = createPublicKey({ key: jwk, format: 'jwk' });
-  // ECDSA P-256: JWS 서명은 raw r||s(IEEE-P1363)이며 DER이 아님 → dsaEncoding 명시 필수.
-  const ok = cryptoVerify('SHA256', Buffer.from(`${parts[0]}.${parts[1]}`), { key: pub, dsaEncoding: 'ieee-p1363' }, sig);
-  if (!ok) throw { code: 401, msg: 'bad signature' };
-  const c = b64urlJson(parts[1]); // 검증된 클레임
-  // split-horizon: 토큰 iss는 브라우저값(localhost:8444) — 정확히 일치해야 함(JWKS는 in-cluster svc에서 받음).
-  if (!KANIDM_ISSUERS.includes(c.iss)) throw { code: 401, msg: 'bad iss' };
-  const aud = Array.isArray(c.aud) ? c.aud : c.aud ? [c.aud] : [];
-  if (c.azp !== KANIDM_AZP && !aud.includes(KANIDM_AZP)) throw { code: 401, msg: 'bad azp/aud' };
-  // ── 공통 꼬리: 시간 검증 + 클레임 추출 ──
-  const now = Date.now();
-  if (c.exp && c.exp * 1000 < now) throw { code: 401, msg: 'token expired' };
-  if (c.nbf && c.nbf * 1000 > now + 30000) throw { code: 401, msg: 'token not yet valid' };
+  } catch {
+    throw { code: 503, msg: 'Supabase identity authority unavailable' };
+  }
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw { code: response.status === 403 ? 403 : 401, msg: body.error || 'invalid Supabase session' };
+  }
   return {
-    username: identityUsernameFromClaims(c),
-    groups: identityGroupsFromClaims(c),
+    username: body.username || body.subject || 'unknown',
+    subject: body.subject || '',
+    groups: identityGroupAliases(body.groups),
+    permissions: Array.isArray(body.permissions) ? body.permissions : [],
+    assurance: String(body.assurance || 'aal1'),
+    provider: 'supabase',
   };
 }
 const readBody = (req) => {
@@ -280,7 +250,7 @@ const LEARNING_RESOURCES = [
     href: 'https://developers.redhat.com/topics/open-data-hub',
   },
   {
-    title: 'OpenSphere AI Hub tutorial - agent operations example',
+    title: 'AI-Workbench tutorial - agent operations example',
     provider: 'OpenSphere',
     type: 'Tutorial',
     duration: '1 hour',
@@ -288,7 +258,7 @@ const LEARNING_RESOURCES = [
     href: '#',
   },
   {
-    title: 'OpenSphere AI Hub CRD reference',
+    title: 'AI-Workbench CRD reference',
     provider: 'Platform team',
     type: 'Documentation',
     duration: 'Reference',
@@ -1111,6 +1081,25 @@ async function requireResourceAccess(req, action, { verb, group = '', resource, 
   await appendSecurityAudit(req, true, action, target, 'RBAC check passed');
 }
 
+// 모델 승격 승인/거부는 거버넌스 행위다. 대상 claim 에 대한 일반 편집(patch) 권한으로는 부족하며,
+// 명시적 승인자 role(approve/reject verb) 또는 플랫폼 관리자만 수행할 수 있다.
+// 종전에는 retry·suspend 와 동일한 patch 권한이면 통과했다.
+async function requirePromotionDecisionAccess(req, action, target, decisionVerb) {
+  const actor = await requestActor(req);
+  const auditTarget = { ...target, verb: decisionVerb };
+  if (await selfCan(req, decisionVerb, target.group, target.resource, target.namespace || undefined)) {
+    await appendSecurityAudit(req, true, action, auditTarget, `promotion decision RBAC check passed (${decisionVerb})`);
+    return;
+  }
+  if (actorIsAdmin(actor)) {
+    await appendSecurityAudit(req, true, action, auditTarget, `admin group matched: ${ADMIN_GROUPS.join(', ')}`);
+    return;
+  }
+  const reason = `requires ${decisionVerb} on ${target.group}/${target.resource}${target.namespace ? ` in ${target.namespace}` : ''} or OpenSphere admin group`;
+  await appendSecurityAudit(req, false, action, auditTarget, reason);
+  throw { code: 403, msg: `Forbidden: ${reason}` };
+}
+
 async function requireAdminAccess(req, action) {
   const actor = await requestActor(req);
   if (actorIsAdmin(actor)) {
@@ -1813,14 +1802,14 @@ function prometheusMetricsText() {
   lines.push('# TYPE opensphere_subshell_events_emitted_total counter');
   lines.push(`opensphere_subshell_events_emitted_total{service="${SERVICE}"} ${standardMetrics.emittedEvents}`);
   lines.push(
-    '# HELP opensphere_ai_controller_reconcile_total Total OpenSphere AI Hub claim reconciliations.',
+    '# HELP opensphere_ai_controller_reconcile_total Total AI-Workbench claim reconciliations.',
     '# TYPE opensphere_ai_controller_reconcile_total counter',
   );
   for (const [key, item] of controllerMetrics.reconciles.entries()) {
     const labels = metricLabelsFromKey(key);
     lines.push(`opensphere_ai_controller_reconcile_total{controller="${labels.controller}",phase="${labels.phase}",backend="${labels.backend}"} ${item.total}`);
   }
-  lines.push('# HELP opensphere_ai_controller_reconcile_failures_total Total failed OpenSphere AI Hub claim reconciliations.');
+  lines.push('# HELP opensphere_ai_controller_reconcile_failures_total Total failed AI-Workbench claim reconciliations.');
   lines.push('# TYPE opensphere_ai_controller_reconcile_failures_total counter');
   for (const [key, item] of controllerMetrics.reconciles.entries()) {
     const labels = metricLabelsFromKey(key);
@@ -1832,7 +1821,7 @@ function prometheusMetricsText() {
     const labels = metricLabelsFromKey(key);
     lines.push(`opensphere_ai_controller_reconcile_duration_ms_total{controller="${labels.controller}",phase="${labels.phase}",backend="${labels.backend}"} ${item.durationMsTotal}`);
   }
-  lines.push('# HELP opensphere_ai_controller_events_total Total Kubernetes Events emitted by OpenSphere AI Hub controller.');
+  lines.push('# HELP opensphere_ai_controller_events_total Total Kubernetes Events emitted by AI-Workbench controller.');
   lines.push('# TYPE opensphere_ai_controller_events_total counter');
   for (const [key, item] of controllerMetrics.events.entries()) {
     const labels = metricLabelsFromKey(key);
@@ -1929,7 +1918,7 @@ async function nativeAuditLog() {
 const PASSIVE_RECONCILE_TARGETS = [
   { path: '/apis/orchestrator.ai.opensphere.io/v1alpha1/aiagents', plural: 'aiagents', kind: 'AIAgent', controller: 'agent-controller', phase: 'Ready', reason: 'AgentConfigured', message: 'Agent declaration is accepted by the OpenSphere internal controller.' },
   { path: '/apis/ai.opensphere.io/v1alpha1/dataconnectionclaims', plural: 'dataconnectionclaims', kind: 'DataConnectionClaim', controller: 'data-connection-controller', phase: 'Ready', reason: 'ConnectionConfigured', message: 'Data connection metadata is configured for workspace use.' },
-  { path: '/apis/ai.foundation.opensphere.io/v1alpha1/llmrouteclaims', plural: 'llmrouteclaims', kind: 'LLMRouteClaim', controller: 'llm-route-controller', phase: 'Ready', reason: 'RouteConfigured', message: 'LLM route is registered for OpenSphere AI Hub consumers.' },
+  { path: '/apis/ai.foundation.opensphere.io/v1alpha1/llmrouteclaims', plural: 'llmrouteclaims', kind: 'LLMRouteClaim', controller: 'llm-route-controller', phase: 'Ready', reason: 'RouteConfigured', message: 'LLM route is registered for AI-Workbench consumers.' },
   { path: '/apis/ai.foundation.opensphere.io/v1alpha1/vectorretrievalclaims', plural: 'vectorretrievalclaims', kind: 'VectorRetrievalClaim', controller: 'retrieval-controller', phase: 'Ready', reason: 'RetrievalConfigured', message: 'Retrieval route is registered for RAG workflows.' },
   { path: '/apis/ai.opensphere.io/v1alpha1/pipelineclaims', plural: 'pipelineclaims', kind: 'PipelineClaim', controller: 'pipeline-controller', phase: 'Ready', reason: 'PipelineRegistered', message: 'Pipeline definition is registered and can be used by pipeline runs.' },
   { path: '/apis/ai.opensphere.io/v1alpha1/computebackendclaims', plural: 'computebackendclaims', kind: 'ComputeBackendClaim', controller: 'compute-controller', phase: 'Ready', reason: 'BackendConfigured', message: 'Compute backend claim is available for AI workloads.' },
@@ -3438,7 +3427,7 @@ async function launchWorkbench(req) {
     gpuClass: body.gpuClass || '',
     storage: body.storage || '20Gi',
   }, namespace);
-  const metadata = objectMeta(name, namespace, 'JupyterLab-compatible OpenSphere AI Hub workbench.');
+  const metadata = objectMeta(name, namespace, 'JupyterLab-compatible AI-Workbench runtime.');
   if (routed.routedBackend) {
     metadata.annotations = {
       ...(metadata.annotations || {}),
@@ -5765,7 +5754,9 @@ function identityGroupsFromClaims(claims = {}) {
     values.push(...identityClaimStrings(claims[key]));
   }
   values.push(...identityClaimStrings(claims.realm_access?.roles));
-  values.push(...identityClaimStrings(claims.resource_access?.[KANIDM_AZP]?.roles));
+  for (const access of Object.values(claims.resource_access || {})) {
+    values.push(...identityClaimStrings(access?.roles));
+  }
   return identityGroupAliases(values);
 }
 
@@ -6188,7 +6179,7 @@ async function ingestVectorMemoryItem({ namespace, collection, documentId, conte
   const text = optionalString(content);
   if (!text) throw { code: 400, msg: 'content is required' };
   return withModelRegistryPg(async (client) => {
-    await upsertVectorCollection(client, ns, collectionName, 'OpenSphere AI Hub pgvector memory collection.', {
+    await upsertVectorCollection(client, ns, collectionName, 'AI-Workbench pgvector memory collection.', {
       provider: 'backbone-postgres',
       dimensions: 16,
       owner: optionalString(owner) || actor?.username || 'opensphere-ai-hub',
@@ -6215,7 +6206,7 @@ async function vectorMemoryBootstrap(req) {
   const namespace = requireDnsName(body.namespace || 'opensphere-system', 'namespace');
   const collection = requireDnsName(body.collection || 'oah-vector-memory', 'collection');
   const samples = [
-    { documentId: 'model-registry', content: 'OpenSphere AI Hub stores model versions, promotion decisions, evaluation metrics, and approval audit records in Backbone PostgreSQL.', topic: 'registry' },
+    { documentId: 'model-registry', content: 'AI-Workbench stores model versions, promotion decisions, evaluation metrics, and approval audit records in Backbone PostgreSQL.', topic: 'registry' },
     { documentId: 'object-storage', content: 'Backbone RustFS provides S3-compatible object storage for model artifacts, KServe storageUri, and pipeline artifacts.', topic: 'storage' },
     { documentId: 'workbench', content: 'WorkbenchClaim starts a JupyterLab-compatible runtime with PVC workspace storage and optional data connection references.', topic: 'workbench' },
   ];
@@ -8030,7 +8021,7 @@ async function seedNativeCatalog(req) {
     metadata: { name: 'opensphere-ai-default', namespace: 'opensphere-system' },
     spec: {
       sourceType: 'embedded',
-      sourceRef: 'opensphere-shell-ai/server.js',
+      sourceRef: 'opensphere-shell-ai-workbench/server.js',
       pollInterval: '10m',
       components: NATIVE_COMPONENTS.map((component) => component.name),
     },
@@ -8664,6 +8655,13 @@ function actionTargetForDelete(body) {
   };
 }
 
+// 모델 승격 결정은 일반 편집(patch)과 분리된 RBAC verb 를 쓴다.
+const PROMOTION_DECISION_VERBS = { approve: 'approve', promote: 'approve', reject: 'reject' };
+
+// 제공자(플랫폼 운영자) 행위로 분류된 생성 페이지. 네임스페이스 편집권만으로 수행되면 안 된다.
+// compute = 외부 GPU 백엔드 등록 경로이므로 특히 중요하다.
+const PROVIDER_ONLY_CREATE_PAGES = new Set(['compute', 'llm-routes', 'eval-policy']);
+
 function operationTarget(pathname, body) {
   if (pathname === '/operations/workbenches') {
     return { verb: 'patch', group: 'ai.opensphere.io', resource: 'workbenchclaims', namespace: body.namespace || 'default', kind: 'WorkbenchClaim', name: body.name || '' };
@@ -8673,6 +8671,9 @@ function operationTarget(pathname, body) {
   }
   if (pathname === '/operations/pipelines/run') {
     return { verb: 'create', group: 'ai.opensphere.io', resource: 'pipelinerunclaims', namespace: body.namespace || 'default', kind: 'PipelineRunClaim', name: body.runName || body.name || '' };
+  }
+  if (pathname === '/operations/training/lifecycle') {
+    return { verb: 'patch', group: 'ai.opensphere.io', resource: 'trainingjobclaims', namespace: body.namespace || 'default', kind: 'TrainingJobClaim', name: body.name || '' };
   }
   if (pathname === '/operations/claims') {
     const def = (body.kind && ACTION_BY_KIND[body.kind]) || ACTIONS[body.page];
@@ -8890,11 +8891,10 @@ function oahAgentToolsManifest() {
     },
     security: {
       headers: {
-        // OAH authenticates on x-os-id-token alone (JWKS/issuer/audience/group claim
-        // verification). Authorization: Bearer carries the OpenSphere PAT for BFF/registry
-        // calls only — OAH does not accept an opaque PAT as x-os-id-token (2026-07-03 review).
+        // OAH authenticates x-os-id-token through the Console Supabase session authority.
+        // Authorization: Bearer carries the OpenSphere PAT for BFF/registry calls only.
         auth: 'Authorization: Bearer <OpenSphere PAT> (BFF/registry only — not evaluated by OAH)',
-        idToken: 'x-os-id-token: <Kanidm/OIDC id_token, or an OAH-verifiable delegated agent JWT> (required for OAH API calls)',
+        idToken: 'x-os-id-token: <Supabase access token> (required for OAH API calls)',
         correlation: 'X-OS-Correlation-ID: <stable user-request or agent-task id>',
         idempotency: 'X-OS-Idempotency-Key: <required for mutating apply calls>',
       },
@@ -8944,6 +8944,7 @@ const ADMIN_READ_PATHS = new Set([
   '/admin/native/demo-smoke/preview',
   '/admin/setup/status',
   '/admin/setup/plan',
+  '/admin/cluster-settings',
   '/memory/vector',
   '/operations/ledger',
 ]);
@@ -8969,11 +8970,27 @@ async function requireOperationalReadAccess(req, action) {
   throw { code: 403, msg: `Forbidden: ${reason}` };
 }
 
+// 파이프라인 실행 로그·계보는 워크로드 내부를 드러내므로 대상 claim 에 대한 읽기 권한을 요구한다.
+const RUN_DETAIL_READ_PATHS = new Set(['/pipeline/runs/logs', '/pipeline/runs/lineage']);
+
 async function authorizeAiReadRequest(req, pathname) {
   if (req.method !== 'GET') return;
   if (pathname === '/memory/vector') {
     if (requestIsLoopback(req)) return;
     await requestActor(req);
+    return;
+  }
+  if (RUN_DETAIL_READ_PATHS.has(pathname)) {
+    if (requestIsLoopback(req)) return;
+    const query = new URL(req.url || '', 'http://localhost').searchParams;
+    await requireResourceAccess(req, pathname, {
+      verb: 'get',
+      group: 'ai.opensphere.io',
+      resource: 'pipelinerunclaims',
+      namespace: optionalString(query.get('namespace') || '') || 'default',
+      kind: 'PipelineRunClaim',
+      name: optionalString(query.get('name') || ''),
+    });
     return;
   }
   if (ADMIN_READ_PATHS.has(pathname)) {
@@ -8990,8 +9007,6 @@ async function authorizeAiRequest(req, pathname) {
   const idempotencyKey = String(req.headers['x-os-idempotency-key'] || '');
   if (!/^[A-Za-z0-9._:-]{1,128}$/.test(correlationId)) throw { code: 400, msg: 'X-OS-Correlation-ID is required for mutating requests.' };
   if (!/^[A-Za-z0-9._:-]{1,128}$/.test(idempotencyKey)) throw { code: 400, msg: 'X-OS-Idempotency-Key is required for mutating requests.' };
-  if (pathname === '/admin/setup/plan') return;
-
   const adminPaths = new Set([
     '/admin/odh-components/action',
     '/admin/native/catalog/seed',
@@ -9011,6 +9026,21 @@ async function authorizeAiRequest(req, pathname) {
     '/admin/native/support-services/observability/configure',
     '/admin/native/support-services/distributed/configure',
     '/admin/native/support-services/pipelines/configure',
+    '/admin/native/support-services/serving/configure',
+    '/admin/native/support-services/backbone/claim',
+    '/admin/native/support-services/backbone/claim/preview',
+    '/admin/native/support-services/backbone/bindings',
+    '/admin/native/support-services/backbone/bindings/preview',
+    '/admin/native/foundation-services/configure',
+    '/admin/native/compute-routing',
+    // GPU bridge: 인가 없이 통과하면 서버가 ServiceAccount 권한으로 읽은 Secret 토큰을
+    // 호출자가 지정한 임의 URL 로 Bearer 전송한다(자격증명 유출 + SSRF).
+    '/admin/native/gpu-bridge/health',
+    '/admin/native/gpu-bridge/capabilities',
+    '/admin/native/gpu-bridge/smoke',
+    '/admin/native/gpu-bridge/register',
+    '/admin/native/gpu-bridge/training-smoke',
+    '/admin/setup/plan',
     '/admin/setup/install',
   ]);
   if (pathname.startsWith('/admin/native/reconcile/')) {
@@ -9022,8 +9052,23 @@ async function authorizeAiRequest(req, pathname) {
     return;
   }
 
+  if (pathname === '/workbenches/launch') {
+    const body = await prepareJsonBody(req);
+    await requireResourceAccess(req, pathname, {
+      verb: 'create',
+      group: 'ai.opensphere.io',
+      resource: 'workbenchclaims',
+      namespace: optionalString(body.namespace || '') || 'default',
+      kind: 'WorkbenchClaim',
+      name: optionalString(body.name || ''),
+    });
+    return;
+  }
   if (pathname === '/actions/create') {
     const body = await prepareJsonBody(req);
+    if (PROVIDER_ONLY_CREATE_PAGES.has(body.page)) {
+      await requireAdminAccess(req, `${pathname}:${body.page}`);
+    }
     await requireResourceAccess(req, pathname, actionTargetForCreate(body));
     return;
   }
@@ -9034,7 +9079,12 @@ async function authorizeAiRequest(req, pathname) {
   }
   if (pathname.startsWith('/operations/')) {
     const body = await prepareJsonBody(req);
-    await requireResourceAccess(req, pathname, operationTarget(pathname, body));
+    const target = operationTarget(pathname, body);
+    if (target.kind === 'ModelPromotionClaim' && PROMOTION_DECISION_VERBS[body.action]) {
+      await requirePromotionDecisionAccess(req, pathname, target, PROMOTION_DECISION_VERBS[body.action]);
+      return;
+    }
+    await requireResourceAccess(req, pathname, target);
     return;
   }
   if ((pathname === '/models/registry/versions' || pathname === '/models/registry/import-serving') && req.method === 'POST') {
@@ -11613,7 +11663,7 @@ function oahPrometheusRuleManifest() {
             for: '5m',
             labels: { severity: 'warning' },
             annotations: {
-              summary: 'OpenSphere AI Hub controller reconcile failures detected',
+              summary: 'AI-Workbench controller reconcile failures detected',
               description: 'One or more OAH controller reconciliations failed during the last 10 minutes.',
             },
           },
@@ -13370,7 +13420,9 @@ const RESOURCE_ACCESS = {
   AIAgent: { group: 'orchestrator.ai.opensphere.io', resource: 'aiagents' },
   Artifact: { group: 'ai.opensphere.io', resource: 'artifactclaims' },
   ArtifactClaim: { group: 'ai.opensphere.io', resource: 'artifactclaims' },
+  ClusterServingRuntime: { group: 'serving.kserve.io', resource: 'clusterservingruntimes', scope: 'Cluster' },
   ComputeBackendClaim: { group: 'ai.opensphere.io', resource: 'computebackendclaims' },
+  DataScienceCluster: { group: 'datasciencecluster.opendatahub.io', resource: 'datascienceclusters', scope: 'Cluster' },
   DataConnectionClaim: { group: 'ai.opensphere.io', resource: 'dataconnectionclaims' },
   DatasetClaim: { group: 'ai.opensphere.io', resource: 'datasetclaims' },
   DistributedWorkloadClaim: { group: 'ai.opensphere.io', resource: 'distributedworkloadclaims' },
@@ -13381,8 +13433,11 @@ const RESOURCE_ACCESS = {
   ExperimentClaim: { group: 'ai.opensphere.io', resource: 'experimentclaims' },
   InferenceClaim: { group: 'ai.opensphere.io', resource: 'inferenceclaims' },
   InferenceService: { group: 'serving.kserve.io', resource: 'inferenceservices' },
+  KueueClusterQueue: { group: 'kueue.x-k8s.io', resource: 'clusterqueues', scope: 'Cluster' },
+  KueueWorkload: { group: 'kueue.x-k8s.io', resource: 'workloads' },
   LLMRouteClaim: { group: 'ai.foundation.opensphere.io', resource: 'llmrouteclaims' },
   ModelPromotionClaim: { group: 'ai.opensphere.io', resource: 'modelpromotionclaims' },
+  ModelRegistry: { group: 'modelregistry.opendatahub.io', resource: 'modelregistries' },
   MonitoringTarget: { group: 'ai.opensphere.io', resource: 'monitoringtargets' },
   Notebook: { group: 'kubeflow.org', resource: 'notebooks' },
   OpenSphereDataScienceCluster: { group: 'ai.opensphere.io', resource: 'openspheredatascienceclusters' },
@@ -13398,15 +13453,27 @@ const RESOURCE_ACCESS = {
   WorkbenchClaim: { group: 'ai.opensphere.io', resource: 'workbenchclaims' },
 };
 
+// 토큰 없는 요청은 in-cluster loopback(릴리스 검증 스크립트가 파드 안에서 wget으로 호출하는 경로)만
+// 허용하고, 그 밖에는 아무 항목도 돌려주지 않는다. 예전에는 토큰 부재 시 전 항목을 그대로 반환해
+// 외부 무인증 GET이 클러스터 전체 목록을 읽을 수 있었다.
+function readableItemsUnauthenticated(req, items) {
+  return requestIsLoopback(req) ? items || [] : [];
+}
+
 async function filterReadableItems(req, items) {
-  if (!req?.headers?.['x-os-id-token']) return items || [];
+  if (!req?.headers?.['x-os-id-token']) return readableItemsUnauthenticated(req, items);
   const filtered = await Promise.all((items || []).map(async (item) => {
     if (item.reference === true) return item;
     const namespace = optionalString(item.namespace || '');
-    if (!namespace) return item;
     const target = RESOURCE_ACCESS[item.kind || ''];
+    // 카탈로그·노트북 이미지·학습자료처럼 K8s 객체가 아닌 합성 항목은 per-object RBAC 대상이 아니다.
+    // 인증된 호출자에게만 보이며(위 토큰 게이트), accessChecked:false 로 검사되지 않았음을 정직하게 남긴다.
     if (!target) return { ...item, accessChecked: false };
-    const allowed = await selfCan(req, 'get', target.group, target.resource, namespace, item.name || '');
+    const allowed = target.scope === 'Cluster'
+      ? await selfCan(req, 'get', target.group, target.resource, '', item.name || '')
+      : namespace
+        ? await selfCan(req, 'get', target.group, target.resource, namespace, item.name || '')
+        : true;
     return allowed ? { ...item, accessChecked: true } : null;
   }));
   return filtered.filter(Boolean);
@@ -14927,7 +14994,7 @@ async function oahDemoPlan(req) {
     task('readiness', 'Operate', 'Prove platform readiness and auditability', 'Cluster settings', ['Native readiness', 'Controller metrics', 'Audit log'], 'Operator can verify native readiness, backend mode, GPU status, and audit log in one place.', false, nativeReady),
   ];
   return {
-    title: 'OpenSphere AI Hub GPU lifecycle demo',
+    title: 'AI-Workbench GPU lifecycle demo',
     acronym: 'OAH',
     phase,
     generatedAt: new Date().toISOString(),
@@ -15114,7 +15181,7 @@ async function ensureDemoNamespace(namespace, req) {
     },
     annotations: {
       'opensphere.io/display-name': 'OAH GPU lifecycle demo',
-      'opensphere.io/description': 'OpenSphere AI Hub end-to-end lifecycle demo workspace.',
+      'opensphere.io/description': 'AI-Workbench end-to-end lifecycle demo workspace.',
     },
   };
   if (existing) {
@@ -15400,7 +15467,7 @@ function smokeJobManifest(step, namespace, image) {
       labels,
       annotations: {
         'opensphere.io/display-name': step.title,
-        'opensphere.io/description': 'OpenSphere AI Hub executable lifecycle smoke demo job.',
+        'opensphere.io/description': 'AI-Workbench executable lifecycle smoke demo job.',
       },
     },
     spec: {
@@ -15739,7 +15806,7 @@ async function oahDemoRunPreview(namespace = OAH_DEMO_NAMESPACE, req = null) {
       },
       annotations: {
         'opensphere.io/display-name': 'OAH GPU lifecycle demo',
-        'opensphere.io/description': 'OpenSphere AI Hub end-to-end lifecycle demo workspace.',
+        'opensphere.io/description': 'AI-Workbench end-to-end lifecycle demo workspace.',
       },
     },
   };
@@ -16220,8 +16287,8 @@ async function resourcePayload(kind, req) {
 }
 
 async function filterReadableProjects(req, items) {
-  if (!req?.headers?.['x-os-id-token']) return items || [];
-  const filtered = await Promise.all(items.map(async (item) => {
+  if (!req?.headers?.['x-os-id-token']) return readableItemsUnauthenticated(req, items);
+  const filtered = await Promise.all((items || []).map(async (item) => {
     if (item.reference === true) return item;
     const allowed = await selfCan(req, 'get', '', 'namespaces', '', item.name || '');
     return allowed ? { ...item, accessChecked: true } : null;
@@ -16444,13 +16511,13 @@ async function k8sProxy(req, res, rawUrl) {
 }
 
 const AI_SEARCH_ITEMS = [
-  ['Workbench', 'Notebook and interactive development', '/p/ai/workbenches'],
-  ['Pipeline', 'Pipeline definitions and runs', '/p/ai/pipelines'],
-  ['Training', 'Training jobs and compute', '/p/ai/training/jobs'],
-  ['Model', 'Model registry and promotions', '/p/ai/models/registry'],
-  ['Inference', 'Serving runtimes and endpoints', '/p/ai/inference'],
-  ['Evaluation', 'Evaluation policies and jobs', '/p/ai/evaluation/jobs'],
-  ['Monitoring', 'TrustyAI metrics and alerts', '/p/ai/monitoring/trustyai'],
+  ['Workbench', 'Notebook and interactive development', '/p/ai-workbench/workbenches'],
+  ['Pipeline', 'Pipeline definitions and runs', '/p/ai-workbench/pipelines'],
+  ['Training', 'Training jobs and compute', '/p/ai-workbench/pipelines/training-jobs'],
+  ['Model', 'Model registry and promotions', '/p/ai-workbench/models/registry'],
+  ['Model deployments', 'Serving runtimes and endpoints', '/p/ai-workbench/models/deployments'],
+  ['Evaluation', 'Evaluation policies and jobs', '/p/ai-workbench/experiments/evaluation-jobs'],
+  ['Monitoring', 'TrustyAI metrics and alerts', '/p/ai-workbench/monitoring/trustyai'],
 ];
 
 const STANDARD_CONTRIBUTIONS = Object.freeze({
@@ -16478,8 +16545,8 @@ function aiManualSource() {
   return {
     schema: 'manual.opensphere.io/v1alpha1',
     sourceId: 'opensphere-ai-hub',
-    title: 'OpenSphere AI Hub Manual',
-    route: '/p/ai',
+    title: 'AI-Workbench Manual',
+    route: '/p/ai-workbench',
     manualRoute: '/p/manual',
     locale: 'ko-KR',
     contentPath: '/plugins/manual/ai.ko.md',
@@ -16510,8 +16577,8 @@ function aiContract() {
 function aiOpenApi() {
   return {
     openapi: '3.1.0',
-    info: { title: 'OpenSphere AI Hub API', version: VERSION },
-    servers: [{ url: '/api/plugins/ai' }],
+    info: { title: 'AI-Workbench API', version: VERSION },
+    servers: [{ url: API_BASE }],
     paths: {
       '/readyz': { get: { operationId: 'getAiReadiness', responses: { 200: { description: 'AI subShell readiness' } } } },
       '/api/status': { get: { operationId: 'getAiIntegrationStatus', responses: { 200: { description: 'AI runtime and integration readiness' } } } },
@@ -16531,13 +16598,17 @@ async function aiRuntimeReadiness() {
   const checks = [];
   const tokenPresent = fs.existsSync(`${SA}/token`);
   checks.push({ name: 'serviceAccountToken', ready: tokenPresent });
-  checks.push({ name: 'kanidmCa', ready: fs.existsSync(KANIDM_CA_PATH) });
   checks.push({ name: 'workbenchImage', ready: /^.+@sha256:[a-f0-9]{64}$/i.test(WORKBENCH_IMAGE) });
-  const [apiVersion, backbone, workbenchClaimCrd] = await Promise.all([
+  const [identityAuthority, apiVersion, backbone, workbenchClaimCrd] = await Promise.all([
+    fetch(`${CONSOLE_IDENTITY_URL}/api/identity/session`, {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(3000),
+    }).then((response) => [200, 401, 403].includes(response.status)).catch(() => false),
     tokenPresent ? k8sJson('/version') : null,
     tokenPresent ? k8sJson(`/apis/backbone.opensphere.io/v1alpha1/namespaces/${AI_DOMAIN_NAMESPACE}/backboneclaims/${BACKBONE_CLAIM_NAME}`) : null,
     tokenPresent ? crdInstalled('workbenchclaims.ai.opensphere.io') : false,
   ]);
+  checks.push({ name: 'supabaseIdentityAuthority', ready: identityAuthority });
   checks.push({ name: 'kubernetesApi', ready: !!apiVersion });
   checks.push({ name: 'backboneClaim', ready: !!backbone });
   checks.push({ name: 'workbenchClaimCrd', ready: !!workbenchClaimCrd });
@@ -16725,7 +16796,7 @@ const server = http.createServer(async (req, res) => {
       const secure = req.headers['x-forwarded-proto'] === 'https' ? ' Secure;' : '';
       res.writeHead(200, {
         'content-type': 'application/json',
-        'set-cookie': `${COOKIE}=${encodeURIComponent(req.headers['x-os-id-token'])}; HttpOnly; SameSite=Strict; Path=/api/plugins/ai;${secure} Max-Age=600`,
+        'set-cookie': `${COOKIE}=${encodeURIComponent(req.headers['x-os-id-token'])}; HttpOnly; SameSite=Strict; Path=${API_BASE};${secure} Max-Age=600`,
       });
       return res.end(JSON.stringify({ user: actor.username }));
     }

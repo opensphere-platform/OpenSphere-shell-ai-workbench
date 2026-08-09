@@ -12,8 +12,12 @@ const signature = (text, key) => sign('sha256', Buffer.from(text), { key, dsaEnc
 const key = createPrivateKey(readFileSync(keyPath));
 
 const entry = readFileSync(resolve(root, 'ui-shell/ui-shell.plugin.js'), 'utf8');
+const manifestSourcePath = resolve(root, 'ui-shell/ui-shell.manifest.source.json');
 const manifestPath = resolve(root, 'ui-shell/ui-shell.manifest.json');
-const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+const manifest = JSON.parse(readFileSync(manifestSourcePath, 'utf8'));
+if ('entrySha256' in manifest || 'assets' in manifest) {
+  throw new Error('source manifest must not contain generated entrySha256 or assets');
+}
 manifest.entrySha256 = hash(entry);
 const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
 writeFileSync(manifestPath, manifestText);

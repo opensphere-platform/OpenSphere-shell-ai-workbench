@@ -1,6 +1,9 @@
 // OpenSphere AI — CONSTITUTION-0003 Production subShell reference adapter.
 const TAG = 'osp-ai-shell';
-const RELEASE = '1.1.0-edge.1';
+const RELEASE = '1.1.2';
+// Host-owned module identity. The Main Shell mounts the subShell at /p/<pluginId>
+// and proxies /api/plugins/<pluginId>, so nothing below may hardcode a route.
+const PLUGIN_ID = 'ai-workbench';
 let injected = false;
 let activeContext = null;
 
@@ -12,29 +15,22 @@ function injectOnce(base) {
   const css = document.createElement('link');
   css.rel = 'stylesheet';
   css.href = `${base}/app/styles.css?v=${RELEASE}`;
-  css.setAttribute('data-osp-plugin', 'ai');
+  css.setAttribute('data-osp-plugin', PLUGIN_ID);
   document.head.appendChild(css);
   const script = document.createElement('script');
   script.type = 'module';
   script.src = `${base}/app/main.js?v=${RELEASE}`;
-  script.setAttribute('data-osp-plugin', 'ai');
+  script.setAttribute('data-osp-plugin', PLUGIN_ID);
   document.head.appendChild(script);
 }
 
-const navigation = [
-  { id: 'ai-operate', label: 'AI Operations', children: [
-    { id: 'ai-overview', label: 'Overview', route: '/p/ai' },
-    { id: 'ai-workbenches', label: 'Workbenches', route: '/p/ai/workbenches' },
-    { id: 'ai-pipelines', label: 'Pipelines', route: '/p/ai/pipelines' },
-    { id: 'ai-training', label: 'Training', route: '/p/ai/training/jobs' },
-    { id: 'ai-models', label: 'Models', route: '/p/ai/models/registry' },
-    { id: 'ai-inference', label: 'Inference', route: '/p/ai/inference' },
-    { id: 'ai-evaluation', label: 'Evaluation', route: '/p/ai/evaluation/jobs' },
-    { id: 'ai-monitoring', label: 'Monitoring', route: '/p/ai/monitoring/trustyai' },
-  ] },
-];
+function navigationFor(routeBase) {
+  return [
+    { id: PLUGIN_ID, label: 'AI-Workbench', route: routeBase },
+  ];
+}
 
-async function contributeManual(ctx) {
+async function contributeManual(ctx, routeBase) {
   if (!ctx.extensions.manual || !ctx.api?.fetch) {
     throw new Error('Manual contribution contract is unavailable');
   }
@@ -43,9 +39,9 @@ async function contributeManual(ctx) {
   const content = await response.text();
   ctx.extensions.manual.contribute({
     sourceId: 'opensphere-ai-hub',
-    title: 'OpenSphere AI Hub',
+    title: 'AI-Workbench',
     locale: 'ko-KR',
-    route: '/p/ai',
+    route: routeBase,
     sourcePath: 'ui-shell/manual/ai.ko.md',
     content,
     tags: ['ai', 'workbench', 'pipeline', 'training', 'model', 'inference', 'evaluation', 'monitoring'],
@@ -55,11 +51,12 @@ async function contributeManual(ctx) {
 export async function activate(ctx) {
   activeContext = ctx;
   const base = (ctx.api?.baseUrl ?? '').replace(/\/$/, '');
+  const routeBase = ctx.routing?.basePath ?? `/p/${ctx.pluginId ?? PLUGIN_ID}`;
   const contexts = window.__OPENSPHERE_HOST_CONTEXTS__ ||= Object.create(null);
-  contexts.ai = { api: { baseUrl: base, fetch: ctx.api?.fetch }, routing: ctx.routing };
+  contexts[PLUGIN_ID] = { api: { baseUrl: base, fetch: ctx.api?.fetch }, routing: ctx.routing };
   injectOnce(base);
-  ctx.extensions.registerPage?.({ id: ctx.pluginId, title: 'OpenSphere AI Hub', navBand: 'Operate', elementTag: TAG });
-  ctx.extensions.nav?.contribute(navigation);
+  ctx.extensions.registerPage?.({ id: ctx.pluginId, title: 'AI-Workbench', navBand: 'Operate', elementTag: TAG });
+  ctx.extensions.nav?.contribute(navigationFor(routeBase));
   ctx.extensions.search?.contribute({
     async query(q) {
       const response = await ctx.api.fetch(`search?q=${encodeURIComponent(q)}`);
@@ -68,16 +65,16 @@ export async function activate(ctx) {
       return Array.isArray(body.items) ? body.items : [];
     },
   });
-  await contributeManual(ctx);
+  await contributeManual(ctx, routeBase);
   ctx.notify?.publish({
-    title: 'OpenSphere AI Hub ready',
+    title: 'AI-Workbench ready',
     detail: 'Production subShell capabilities are connected to the Main Shell.',
     severity: 'success',
     persistent: false,
     category: 'AI lifecycle',
-    route: '/p/ai',
+    route: routeBase,
     topic: 'ai.subshell.ready',
-    dedupKey: `ai-ready-${RELEASE}`,
+    dedupKey: `${PLUGIN_ID}-ready-${RELEASE}`,
   });
 }
 
@@ -86,8 +83,8 @@ export function deactivate() {
   activeContext?.extensions.search?.clear();
   activeContext?.extensions.manual?.clear();
   activeContext?.notify?.clear();
-  if (window.__OPENSPHERE_HOST_CONTEXTS__) delete window.__OPENSPHERE_HOST_CONTEXTS__.ai;
-  document.querySelectorAll('[data-osp-plugin="ai"]').forEach((node) => node.remove());
+  if (window.__OPENSPHERE_HOST_CONTEXTS__) delete window.__OPENSPHERE_HOST_CONTEXTS__[PLUGIN_ID];
+  document.querySelectorAll(`[data-osp-plugin="${PLUGIN_ID}"]`).forEach((node) => node.remove());
   delete window.__OSP_NG_API_BASE__;
   delete window.__OSP_AI_API_BASE__;
   activeContext = null;

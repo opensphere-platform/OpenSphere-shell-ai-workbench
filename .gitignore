@@ -6,3 +6,11 @@ artifacts/
 .angular/
 *.log
 .DS_Store
+
+# Release-only signed artifacts. The release build creates these from the source
+# manifest with the approved P-256 key. Keeping them out of Git prevents stale
+# descriptors or signatures from being mistaken for the current source contract.
+/module-package.json
+/module-package.json.sig
+/ui-shell/ui-shell.manifest.json
+/ui-shell/ui-shell.manifest.json.sig
