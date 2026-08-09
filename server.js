@@ -1081,6 +1081,25 @@ async function requireResourceAccess(req, action, { verb, group = '', resource, 
   await appendSecurityAudit(req, true, action, target, 'RBAC check passed');
 }
 
+// 모델 승격 승인/거부는 거버넌스 행위다. 대상 claim 에 대한 일반 편집(patch) 권한으로는 부족하며,
+// 명시적 승인자 role(approve/reject verb) 또는 플랫폼 관리자만 수행할 수 있다.
+// 종전에는 retry·suspend 와 동일한 patch 권한이면 통과했다.
+async function requirePromotionDecisionAccess(req, action, target, decisionVerb) {
+  const actor = await requestActor(req);
+  const auditTarget = { ...target, verb: decisionVerb };
+  if (await selfCan(req, decisionVerb, target.group, target.resource, target.namespace || undefined)) {
+    await appendSecurityAudit(req, true, action, auditTarget, `promotion decision RBAC check passed (${decisionVerb})`);
+    return;
+  }
+  if (actorIsAdmin(actor)) {
+    await appendSecurityAudit(req, true, action, auditTarget, `admin group matched: ${ADMIN_GROUPS.join(', ')}`);
+    return;
+  }
+  const reason = `requires ${decisionVerb} on ${target.group}/${target.resource}${target.namespace ? ` in ${target.namespace}` : ''} or OpenSphere admin group`;
+  await appendSecurityAudit(req, false, action, auditTarget, reason);
+  throw { code: 403, msg: `Forbidden: ${reason}` };
+}
+
 async function requireAdminAccess(req, action) {
   const actor = await requestActor(req);
   if (actorIsAdmin(actor)) {
@@ -8636,6 +8655,13 @@ function actionTargetForDelete(body) {
   };
 }
 
+// 모델 승격 결정은 일반 편집(patch)과 분리된 RBAC verb 를 쓴다.
+const PROMOTION_DECISION_VERBS = { approve: 'approve', promote: 'approve', reject: 'reject' };
+
+// 제공자(플랫폼 운영자) 행위로 분류된 생성 페이지. 네임스페이스 편집권만으로 수행되면 안 된다.
+// compute = 외부 GPU 백엔드 등록 경로이므로 특히 중요하다.
+const PROVIDER_ONLY_CREATE_PAGES = new Set(['compute', 'llm-routes', 'eval-policy']);
+
 function operationTarget(pathname, body) {
   if (pathname === '/operations/workbenches') {
     return { verb: 'patch', group: 'ai.opensphere.io', resource: 'workbenchclaims', namespace: body.namespace || 'default', kind: 'WorkbenchClaim', name: body.name || '' };
@@ -8645,6 +8671,9 @@ function operationTarget(pathname, body) {
   }
   if (pathname === '/operations/pipelines/run') {
     return { verb: 'create', group: 'ai.opensphere.io', resource: 'pipelinerunclaims', namespace: body.namespace || 'default', kind: 'PipelineRunClaim', name: body.runName || body.name || '' };
+  }
+  if (pathname === '/operations/training/lifecycle') {
+    return { verb: 'patch', group: 'ai.opensphere.io', resource: 'trainingjobclaims', namespace: body.namespace || 'default', kind: 'TrainingJobClaim', name: body.name || '' };
   }
   if (pathname === '/operations/claims') {
     const def = (body.kind && ACTION_BY_KIND[body.kind]) || ACTIONS[body.page];
@@ -8915,6 +8944,7 @@ const ADMIN_READ_PATHS = new Set([
   '/admin/native/demo-smoke/preview',
   '/admin/setup/status',
   '/admin/setup/plan',
+  '/admin/cluster-settings',
   '/memory/vector',
   '/operations/ledger',
 ]);
@@ -8940,11 +8970,27 @@ async function requireOperationalReadAccess(req, action) {
   throw { code: 403, msg: `Forbidden: ${reason}` };
 }
 
+// 파이프라인 실행 로그·계보는 워크로드 내부를 드러내므로 대상 claim 에 대한 읽기 권한을 요구한다.
+const RUN_DETAIL_READ_PATHS = new Set(['/pipeline/runs/logs', '/pipeline/runs/lineage']);
+
 async function authorizeAiReadRequest(req, pathname) {
   if (req.method !== 'GET') return;
   if (pathname === '/memory/vector') {
     if (requestIsLoopback(req)) return;
     await requestActor(req);
+    return;
+  }
+  if (RUN_DETAIL_READ_PATHS.has(pathname)) {
+    if (requestIsLoopback(req)) return;
+    const query = new URL(req.url || '', 'http://localhost').searchParams;
+    await requireResourceAccess(req, pathname, {
+      verb: 'get',
+      group: 'ai.opensphere.io',
+      resource: 'pipelinerunclaims',
+      namespace: optionalString(query.get('namespace') || '') || 'default',
+      kind: 'PipelineRunClaim',
+      name: optionalString(query.get('name') || ''),
+    });
     return;
   }
   if (ADMIN_READ_PATHS.has(pathname)) {
@@ -8961,8 +9007,6 @@ async function authorizeAiRequest(req, pathname) {
   const idempotencyKey = String(req.headers['x-os-idempotency-key'] || '');
   if (!/^[A-Za-z0-9._:-]{1,128}$/.test(correlationId)) throw { code: 400, msg: 'X-OS-Correlation-ID is required for mutating requests.' };
   if (!/^[A-Za-z0-9._:-]{1,128}$/.test(idempotencyKey)) throw { code: 400, msg: 'X-OS-Idempotency-Key is required for mutating requests.' };
-  if (pathname === '/admin/setup/plan') return;
-
   const adminPaths = new Set([
     '/admin/odh-components/action',
     '/admin/native/catalog/seed',
@@ -8982,6 +9026,21 @@ async function authorizeAiRequest(req, pathname) {
     '/admin/native/support-services/observability/configure',
     '/admin/native/support-services/distributed/configure',
     '/admin/native/support-services/pipelines/configure',
+    '/admin/native/support-services/serving/configure',
+    '/admin/native/support-services/backbone/claim',
+    '/admin/native/support-services/backbone/claim/preview',
+    '/admin/native/support-services/backbone/bindings',
+    '/admin/native/support-services/backbone/bindings/preview',
+    '/admin/native/foundation-services/configure',
+    '/admin/native/compute-routing',
+    // GPU bridge: 인가 없이 통과하면 서버가 ServiceAccount 권한으로 읽은 Secret 토큰을
+    // 호출자가 지정한 임의 URL 로 Bearer 전송한다(자격증명 유출 + SSRF).
+    '/admin/native/gpu-bridge/health',
+    '/admin/native/gpu-bridge/capabilities',
+    '/admin/native/gpu-bridge/smoke',
+    '/admin/native/gpu-bridge/register',
+    '/admin/native/gpu-bridge/training-smoke',
+    '/admin/setup/plan',
     '/admin/setup/install',
   ]);
   if (pathname.startsWith('/admin/native/reconcile/')) {
@@ -8993,8 +9052,23 @@ async function authorizeAiRequest(req, pathname) {
     return;
   }
 
+  if (pathname === '/workbenches/launch') {
+    const body = await prepareJsonBody(req);
+    await requireResourceAccess(req, pathname, {
+      verb: 'create',
+      group: 'ai.opensphere.io',
+      resource: 'workbenchclaims',
+      namespace: optionalString(body.namespace || '') || 'default',
+      kind: 'WorkbenchClaim',
+      name: optionalString(body.name || ''),
+    });
+    return;
+  }
   if (pathname === '/actions/create') {
     const body = await prepareJsonBody(req);
+    if (PROVIDER_ONLY_CREATE_PAGES.has(body.page)) {
+      await requireAdminAccess(req, `${pathname}:${body.page}`);
+    }
     await requireResourceAccess(req, pathname, actionTargetForCreate(body));
     return;
   }
@@ -9005,7 +9079,12 @@ async function authorizeAiRequest(req, pathname) {
   }
   if (pathname.startsWith('/operations/')) {
     const body = await prepareJsonBody(req);
-    await requireResourceAccess(req, pathname, operationTarget(pathname, body));
+    const target = operationTarget(pathname, body);
+    if (target.kind === 'ModelPromotionClaim' && PROMOTION_DECISION_VERBS[body.action]) {
+      await requirePromotionDecisionAccess(req, pathname, target, PROMOTION_DECISION_VERBS[body.action]);
+      return;
+    }
+    await requireResourceAccess(req, pathname, target);
     return;
   }
   if ((pathname === '/models/registry/versions' || pathname === '/models/registry/import-serving') && req.method === 'POST') {
@@ -13341,7 +13420,9 @@ const RESOURCE_ACCESS = {
   AIAgent: { group: 'orchestrator.ai.opensphere.io', resource: 'aiagents' },
   Artifact: { group: 'ai.opensphere.io', resource: 'artifactclaims' },
   ArtifactClaim: { group: 'ai.opensphere.io', resource: 'artifactclaims' },
+  ClusterServingRuntime: { group: 'serving.kserve.io', resource: 'clusterservingruntimes', scope: 'Cluster' },
   ComputeBackendClaim: { group: 'ai.opensphere.io', resource: 'computebackendclaims' },
+  DataScienceCluster: { group: 'datasciencecluster.opendatahub.io', resource: 'datascienceclusters', scope: 'Cluster' },
   DataConnectionClaim: { group: 'ai.opensphere.io', resource: 'dataconnectionclaims' },
   DatasetClaim: { group: 'ai.opensphere.io', resource: 'datasetclaims' },
   DistributedWorkloadClaim: { group: 'ai.opensphere.io', resource: 'distributedworkloadclaims' },
@@ -13352,8 +13433,11 @@ const RESOURCE_ACCESS = {
   ExperimentClaim: { group: 'ai.opensphere.io', resource: 'experimentclaims' },
   InferenceClaim: { group: 'ai.opensphere.io', resource: 'inferenceclaims' },
   InferenceService: { group: 'serving.kserve.io', resource: 'inferenceservices' },
+  KueueClusterQueue: { group: 'kueue.x-k8s.io', resource: 'clusterqueues', scope: 'Cluster' },
+  KueueWorkload: { group: 'kueue.x-k8s.io', resource: 'workloads' },
   LLMRouteClaim: { group: 'ai.foundation.opensphere.io', resource: 'llmrouteclaims' },
   ModelPromotionClaim: { group: 'ai.opensphere.io', resource: 'modelpromotionclaims' },
+  ModelRegistry: { group: 'modelregistry.opendatahub.io', resource: 'modelregistries' },
   MonitoringTarget: { group: 'ai.opensphere.io', resource: 'monitoringtargets' },
   Notebook: { group: 'kubeflow.org', resource: 'notebooks' },
   OpenSphereDataScienceCluster: { group: 'ai.opensphere.io', resource: 'openspheredatascienceclusters' },
@@ -13369,15 +13453,27 @@ const RESOURCE_ACCESS = {
   WorkbenchClaim: { group: 'ai.opensphere.io', resource: 'workbenchclaims' },
 };
 
+// 토큰 없는 요청은 in-cluster loopback(릴리스 검증 스크립트가 파드 안에서 wget으로 호출하는 경로)만
+// 허용하고, 그 밖에는 아무 항목도 돌려주지 않는다. 예전에는 토큰 부재 시 전 항목을 그대로 반환해
+// 외부 무인증 GET이 클러스터 전체 목록을 읽을 수 있었다.
+function readableItemsUnauthenticated(req, items) {
+  return requestIsLoopback(req) ? items || [] : [];
+}
+
 async function filterReadableItems(req, items) {
-  if (!req?.headers?.['x-os-id-token']) return items || [];
+  if (!req?.headers?.['x-os-id-token']) return readableItemsUnauthenticated(req, items);
   const filtered = await Promise.all((items || []).map(async (item) => {
     if (item.reference === true) return item;
     const namespace = optionalString(item.namespace || '');
-    if (!namespace) return item;
     const target = RESOURCE_ACCESS[item.kind || ''];
+    // 카탈로그·노트북 이미지·학습자료처럼 K8s 객체가 아닌 합성 항목은 per-object RBAC 대상이 아니다.
+    // 인증된 호출자에게만 보이며(위 토큰 게이트), accessChecked:false 로 검사되지 않았음을 정직하게 남긴다.
     if (!target) return { ...item, accessChecked: false };
-    const allowed = await selfCan(req, 'get', target.group, target.resource, namespace, item.name || '');
+    const allowed = target.scope === 'Cluster'
+      ? await selfCan(req, 'get', target.group, target.resource, '', item.name || '')
+      : namespace
+        ? await selfCan(req, 'get', target.group, target.resource, namespace, item.name || '')
+        : true;
     return allowed ? { ...item, accessChecked: true } : null;
   }));
   return filtered.filter(Boolean);
@@ -16191,8 +16287,8 @@ async function resourcePayload(kind, req) {
 }
 
 async function filterReadableProjects(req, items) {
-  if (!req?.headers?.['x-os-id-token']) return items || [];
-  const filtered = await Promise.all(items.map(async (item) => {
+  if (!req?.headers?.['x-os-id-token']) return readableItemsUnauthenticated(req, items);
+  const filtered = await Promise.all((items || []).map(async (item) => {
     if (item.reference === true) return item;
     const allowed = await selfCan(req, 'get', '', 'namespaces', '', item.name || '');
     return allowed ? { ...item, accessChecked: true } : null;

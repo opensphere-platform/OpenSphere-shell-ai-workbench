@@ -50,11 +50,23 @@ type PageId =
 
 type ClusterSettingsTab = 'setup' | 'foundation' | 'support' | 'readiness' | 'gpu' | 'demo' | 'operations';
 
+// 이 subShell 은 Console(제공자) 채널이다. audience 는 각 표면이 최종적으로 누구의 것인지를 표시한다.
+//   provider  = 제공자 전용. Workspace 로 이관하지 않는다.
+//   shared    = 같은 리소스를 관리자는 fleet lens 로, 사원은 자기 것만 보는 양쪽 표면.
+//   workforce = 본래 사원(Workspace) 표면. 사원 채널이 서면 이 콘솔에서는 fleet lens 로 재프레임한다.
+// perspective-adr-003 §3.4(이중 투영) 기준이며, 이 필드가 Workspace 이관 명세의 정본이다.
+type NavAudience = 'provider' | 'shared' | 'workforce';
+
+// 최초 벡터 메모리 컬렉션을 만들 때만 쓰는 기본 이름.
+// 질의·ACL 은 이 값이 아니라 사용자가 고른 컬렉션을 대상으로 한다.
+const DEFAULT_VECTOR_COLLECTION = 'oah-vector-memory';
+
 interface NavLeaf {
   kind: 'leaf';
   id: PageId;
   label: string;
   icon?: AiIconNode;
+  audience: NavAudience;
 }
 
 interface NavGroup {
@@ -1855,92 +1867,62 @@ interface SetupForm {
   createDataScienceCluster: boolean;
 }
 
+// 메뉴는 ODH Dashboard(데이터과학자용) IA 를 그대로 쓰지 않고, 제공자 콘솔의 동사에 맞춰
+// 구성 / 거버넌스 / 운영 렌즈 / 학습 4그룹으로 배치한다.
 const NAV_NODES: NavNode[] = [
-  { kind: 'leaf', id: 'home', label: 'Overview', icon: Home16 },
-  { kind: 'leaf', id: 'projects', label: 'Data science projects', icon: Folder16 },
+  { kind: 'leaf', id: 'home', label: 'Overview', icon: Home16, audience: 'shared' },
   {
     kind: 'group',
-    id: 'g-workbenches',
-    label: 'Workbenches',
-    icon: Workspace16,
-    children: [
-      { kind: 'leaf', id: 'workbenches', label: 'Workbenches' },
-      { kind: 'leaf', id: 'notebook-images', label: 'Notebook images' },
-      { kind: 'leaf', id: 'data-connections', label: 'Data connections' },
-    ],
-  },
-  {
-    kind: 'group',
-    id: 'g-models',
-    label: 'Models',
-    icon: MachineLearningModel16,
-    children: [
-      { kind: 'leaf', id: 'model-registry', label: 'Model registry' },
-      { kind: 'leaf', id: 'serving-runtimes', label: 'Serving runtimes' },
-      { kind: 'leaf', id: 'llm-routes', label: 'LLM routes' },
-      { kind: 'leaf', id: 'retrieval', label: 'Retrieval' },
-      { kind: 'leaf', id: 'inference', label: 'Model deployments' },
-    ],
-  },
-  {
-    kind: 'group',
-    id: 'g-pipelines',
-    label: 'Data science pipelines',
-    icon: Flow16,
-    children: [
-      { kind: 'leaf', id: 'pipelines', label: 'Pipelines' },
-      { kind: 'leaf', id: 'pipeline-runs', label: 'Runs' },
-      { kind: 'leaf', id: 'compute', label: 'Compute backends' },
-      { kind: 'leaf', id: 'datasets', label: 'Datasets' },
-      { kind: 'leaf', id: 'training-jobs', label: 'Training jobs' },
-      { kind: 'leaf', id: 'model-promotion', label: 'Model promotion' },
-    ],
-  },
-  {
-    kind: 'group',
-    id: 'g-experiments',
-    label: 'Experiments',
-    icon: ChartLine16,
-    children: [
-      { kind: 'leaf', id: 'experiments-runs', label: 'Experiments and runs' },
-      { kind: 'leaf', id: 'executions', label: 'Executions' },
-      { kind: 'leaf', id: 'artifacts', label: 'Artifacts' },
-      { kind: 'leaf', id: 'eval-policy', label: 'Evaluation policies' },
-      { kind: 'leaf', id: 'eval-jobs', label: 'Evaluation jobs' },
-    ],
-  },
-  {
-    kind: 'group',
-    id: 'g-monitoring',
-    label: 'Monitoring',
-    icon: ChartLine16,
-    children: [
-      { kind: 'leaf', id: 'trustyai-monitoring', label: 'TrustyAI monitoring' },
-      { kind: 'leaf', id: 'distributed-workloads', label: 'Distributed workloads' },
-    ],
-  },
-  {
-    kind: 'group',
-    id: 'g-applications',
-    label: 'Applications',
-    icon: Application16,
-    children: [
-      { kind: 'leaf', id: 'apps-enabled', label: 'Enabled' },
-      { kind: 'leaf', id: 'apps-explore', label: 'Explore' },
-      { kind: 'leaf', id: 'agents', label: 'AI agents' },
-    ],
-  },
-  {
-    kind: 'group',
-    id: 'g-administration',
-    label: 'Administration',
+    id: 'g-configure',
+    label: 'Configure',
     icon: Settings16,
     children: [
-      { kind: 'leaf', id: 'cluster-settings', label: 'Cluster settings' },
+      { kind: 'leaf', id: 'cluster-settings', label: 'Cluster settings', audience: 'provider' },
+      { kind: 'leaf', id: 'compute', label: 'Compute backends', audience: 'provider' },
+      { kind: 'leaf', id: 'llm-routes', label: 'LLM routes', audience: 'provider' },
+      { kind: 'leaf', id: 'serving-runtimes', label: 'Serving runtimes', audience: 'provider' },
+      { kind: 'leaf', id: 'notebook-images', label: 'Notebook images', audience: 'provider' },
+      { kind: 'leaf', id: 'data-connections', label: 'Data connections', audience: 'provider' },
+      { kind: 'leaf', id: 'apps-explore', label: 'Explore applications', audience: 'provider' },
+      { kind: 'leaf', id: 'apps-enabled', label: 'Enabled applications', audience: 'provider' },
+      { kind: 'leaf', id: 'resources', label: 'Component versions', audience: 'provider' },
     ],
   },
-  { kind: 'leaf', id: 'developer-learning', label: 'Learning hub', icon: Education16 },
-  { kind: 'leaf', id: 'resources', label: 'Resources', icon: Document16 },
+  {
+    kind: 'group',
+    id: 'g-govern',
+    label: 'Govern',
+    icon: MachineLearningModel16,
+    children: [
+      { kind: 'leaf', id: 'model-promotion', label: 'Model promotion', audience: 'provider' },
+      { kind: 'leaf', id: 'eval-policy', label: 'Evaluation policies', audience: 'provider' },
+      { kind: 'leaf', id: 'model-registry', label: 'Model registry', audience: 'shared' },
+      { kind: 'leaf', id: 'trustyai-monitoring', label: 'TrustyAI monitoring', audience: 'shared' },
+      { kind: 'leaf', id: 'retrieval', label: 'Retrieval', audience: 'shared' },
+      { kind: 'leaf', id: 'agents', label: 'AI agents', audience: 'shared' },
+    ],
+  },
+  {
+    kind: 'group',
+    id: 'g-operate',
+    label: 'Operate',
+    icon: Workspace16,
+    children: [
+      { kind: 'leaf', id: 'projects', label: 'Data science projects', audience: 'shared' },
+      { kind: 'leaf', id: 'workbenches', label: 'Workbenches', audience: 'workforce' },
+      { kind: 'leaf', id: 'pipelines', label: 'Pipelines', audience: 'workforce' },
+      { kind: 'leaf', id: 'pipeline-runs', label: 'Runs', audience: 'workforce' },
+      { kind: 'leaf', id: 'datasets', label: 'Datasets', audience: 'shared' },
+      { kind: 'leaf', id: 'training-jobs', label: 'Training jobs', audience: 'workforce' },
+      { kind: 'leaf', id: 'experiments-runs', label: 'Experiments and runs', audience: 'workforce' },
+      { kind: 'leaf', id: 'executions', label: 'Executions', audience: 'workforce' },
+      { kind: 'leaf', id: 'artifacts', label: 'Artifacts', audience: 'shared' },
+      { kind: 'leaf', id: 'eval-jobs', label: 'Evaluation jobs', audience: 'workforce' },
+      { kind: 'leaf', id: 'inference', label: 'Model deployments', audience: 'shared' },
+      { kind: 'leaf', id: 'distributed-workloads', label: 'Distributed workloads', audience: 'shared' },
+    ],
+  },
+  { kind: 'leaf', id: 'developer-learning', label: 'Learning hub', icon: Education16, audience: 'workforce' },
 ];
 
 const PAGE_ROUTE: Record<PageId, string> = {
@@ -2486,6 +2468,9 @@ function phaseClass(phase: string): string {
                 @for (child of node.children; track child.id) {
                   <a clrVerticalNavLink [href]="pageHref(child.id)" [class.active]="activePage() === child.id" (click)="navigate(child.id, $event)">
                     {{ child.label }}
+                    @if (child.audience === 'workforce') {
+                      <span class="ai-audience-badge" title="Workspace(사원) 표면. 사원 채널이 서면 이 콘솔에서는 fleet lens 로 재프레임한다.">W</span>
+                    }
                   </a>
                 }
               </clr-vertical-nav-group-children>
@@ -5836,12 +5821,23 @@ function phaseClass(phase: string): string {
                     <button type="button" class="btn btn-sm btn-outline" [disabled]="saving()" (click)="saveVectorCollectionAccess()">SAVE ACCESS</button>
                   </form>
                   <form clrForm clrLayout="compact" class="ai-inline-form">
+                    <clr-select-container>
+                      <label>Collection</label>
+                      <select clrSelect name="vectorQueryCollection" [value]="vectorQueryCollection()" (change)="vectorQueryCollection.set($any($event.target).value)">
+                        @for (collection of vectorCollections(); track collection.namespace + ':' + collection.name) {
+                          <option [value]="collection.namespace + ':' + collection.name">{{ collection.namespace }} / {{ collection.name }}</option>
+                        }
+                      </select>
+                    </clr-select-container>
                     <clr-input-container>
                       <label>Query</label>
-                      <input clrInput name="vectorQueryText" [value]="vectorQueryText()" (input)="vectorQueryText.set($any($event.target).value)" />
+                      <input clrInput name="vectorQueryText" placeholder="Ask a question about the indexed documents" [value]="vectorQueryText()" (input)="vectorQueryText.set($any($event.target).value)" />
                     </clr-input-container>
-                    <button type="button" class="btn btn-sm btn-outline" [disabled]="saving()" (click)="queryVectorMemory()">QUERY</button>
+                    <button type="button" class="btn btn-sm btn-outline" [disabled]="saving() || !vectorCollections().length || !vectorQueryText().trim()" (click)="queryVectorMemory()">QUERY</button>
                   </form>
+                  @if (!vectorCollections().length) {
+                    <p class="ai-hint">No vector memory collection is available yet. An administrator must bootstrap and ingest one before querying.</p>
+                  }
                   @if (vectorQueryResult()?.items?.length) {
                     <table class="table table-compact ai-mini-table">
                       <thead>
@@ -6400,11 +6396,21 @@ function phaseClass(phase: string): string {
                   <label>Display name</label>
                   <input clrInput name="displayName" [value]="createForm().displayName" (input)="setCreateField('displayName', $any($event.target).value)" />
                 </clr-input-container>
+              } @else if (projects().length) {
+                <clr-select-container>
+                  <label>Project</label>
+                  <select clrSelect name="namespace" required [value]="createForm().namespace" (change)="setCreateField('namespace', $any($event.target).value)">
+                    @for (project of projects(); track project.name) {
+                      <option [value]="project.name">{{ project.name }}</option>
+                    }
+                  </select>
+                </clr-select-container>
               } @else {
                 <clr-input-container>
                   <label>Namespace</label>
                   <input clrInput name="namespace" required [value]="createForm().namespace" (input)="setCreateField('namespace', $any($event.target).value)" />
                 </clr-input-container>
+                <p class="ai-hint">No readable project was found. Ask an administrator to create one, or enter a namespace you can access.</p>
               }
 
               <clr-textarea-container>
@@ -6868,8 +6874,17 @@ export class AppComponent implements OnInit, OnDestroy {
   readonly inferenceDetail = signal<InferenceDetailResponse | null>(null);
   readonly dataConnectionDetail = signal<DataConnectionDetailResponse | null>(null);
   readonly vectorMemory = signal<VectorMemoryResponse | null>(null);
-  readonly vectorQueryText = signal('AI-Workbench model registry and object storage');
+  readonly vectorQueryText = signal('');
+  readonly vectorQueryCollection = signal('');
   readonly vectorQueryResult = signal<VectorQueryResponse | null>(null);
+  // 질의 대상 컬렉션은 하드코딩하지 않고 실제 등록된 컬렉션에서 고른다.
+  readonly vectorCollections = computed(() => this.vectorMemory()?.collections || []);
+  readonly selectedVectorCollection = computed(() => {
+    const collections = this.vectorCollections();
+    const key = this.vectorQueryCollection();
+    if (!collections.length) return null;
+    return collections.find((c) => `${c.namespace}:${c.name}` === key) || collections[0];
+  });
   readonly vectorAclOwner = signal('');
   readonly vectorAclGroups = signal('');
   readonly trainingLifecycle = signal<TrainingLifecycleResponse | null>(null);
@@ -7815,7 +7830,7 @@ export class AppComponent implements OnInit, OnDestroy {
       const res = await this.hostFetch(`${this.apiBase}/memory/vector/bootstrap`, {
         method: 'POST',
         headers: this.actionHeaders(),
-        body: JSON.stringify({ namespace, collection: 'oah-vector-memory' }),
+        body: JSON.stringify({ namespace, collection: DEFAULT_VECTOR_COLLECTION }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || data.error || `Vector bootstrap failed with HTTP ${res.status}`);
@@ -7834,11 +7849,13 @@ export class AppComponent implements OnInit, OnDestroy {
     this.saving.set(true);
     this.actionMessage.set(null);
     try {
-      const namespace = this.createForm().namespace || this.projects()[0]?.name || 'opensphere-system';
+      const selected = this.selectedVectorCollection();
+      if (!selected) throw new Error('Select a vector memory collection before querying.');
+      if (!this.vectorQueryText().trim()) throw new Error('Enter a query before searching vector memory.');
       const res = await this.hostFetch(`${this.apiBase}/memory/vector/query`, {
         method: 'POST',
         headers: this.actionHeaders(),
-        body: JSON.stringify({ namespace, collection: 'oah-vector-memory', query: this.vectorQueryText(), limit: 5 }),
+        body: JSON.stringify({ namespace: selected.namespace, collection: selected.name, query: this.vectorQueryText(), limit: 5 }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || data.error || `Vector query failed with HTTP ${res.status}`);
@@ -7856,13 +7873,15 @@ export class AppComponent implements OnInit, OnDestroy {
     this.saving.set(true);
     this.actionMessage.set(null);
     try {
-      const namespace = this.createForm().namespace || this.projects()[0]?.name || 'opensphere-system';
+      // ACL 은 선택한 컬렉션에 적용해야 한다. 종전에는 어떤 컬렉션을 보고 있든 기본 컬렉션에 기록됐다.
+      const selected = this.selectedVectorCollection();
+      if (!selected) throw new Error('Select a vector memory collection before updating access.');
       const res = await this.hostFetch(`${this.apiBase}/memory/vector/collections`, {
         method: 'PATCH',
         headers: this.actionHeaders(),
         body: JSON.stringify({
-          namespace,
-          collection: 'oah-vector-memory',
+          namespace: selected.namespace,
+          collection: selected.name,
           owner: this.vectorAclOwner(),
           groups: this.vectorAclGroups().split(',').map((item) => item.trim()).filter(Boolean),
         }),
@@ -7870,7 +7889,7 @@ export class AppComponent implements OnInit, OnDestroy {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || data.error || `Vector access update failed with HTTP ${res.status}`);
       this.vectorMemory.set(data.state as VectorMemoryResponse);
-      this.actionMessage.set({ type: 'success', message: `Vector collection access updated in ${namespace}.` });
+      this.actionMessage.set({ type: 'success', message: `Vector collection access updated for ${selected.namespace}/${selected.name}.` });
     } catch (error) {
       this.actionMessage.set({ type: 'danger', message: error instanceof Error ? error.message : String(error) });
     } finally {

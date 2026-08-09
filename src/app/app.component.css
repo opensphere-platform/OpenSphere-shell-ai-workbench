@@ -818,6 +818,25 @@
   gap: 0.35rem 0.7rem;
 }
 
+.ai-hint {
+  margin: 0.4rem 0 0;
+  font-size: 0.55rem;
+  color: var(--clr-color-neutral-700, #565656);
+}
+
+/* Workspace(사원) 표면임을 표시하는 배지. 이관 명세의 시각적 형태다. */
+.ai-audience-badge {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0 0.25rem;
+  border: 1px solid var(--clr-color-neutral-500, #9a9a9a);
+  border-radius: 0.15rem;
+  font-size: 0.45rem;
+  line-height: 0.8rem;
+  vertical-align: middle;
+  color: var(--clr-color-neutral-700, #565656);
+}
+
 .ai-inline-form {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
