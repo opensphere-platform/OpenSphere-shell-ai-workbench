@@ -74,7 +74,31 @@ const descriptor = {
   trust: { keyId },
   api: { basePath: manifest.apiBase },
   contributions: manifest.contributions,
+  // 모듈이 자기 의존성을 선언한다. CONSTITUTION-0004 §8.3 이 "machine-readable descriptor 가
+  // dependency DAG 를 선언한다" 고 전제하는 자리이며, 서명 대상에 포함되어 변조되지 않는다.
+  dependencies: manifest.dependencies || [],
 };
+
+// SDK 는 아직 dependencies 를 모른다(미지 필드를 거부하지 않으므로 하위호환).
+// 플랫폼 차원 강제가 생기기 전까지 여기서 검증한다.
+const REQUIRED_FOR = ['Stage', 'Install', 'Activate', 'Ready', 'DataChange']; // 0004 규정 1.5 어휘
+const DEPENDENCY_TYPES = ['resource', 'connection'];
+const DNS_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+const seenDependencyIds = new Set();
+for (const dependency of descriptor.dependencies) {
+  const where = `dependencies[${dependency?.id || '?'}]`;
+  if (!DNS_LABEL.test(String(dependency?.id || ''))) throw new Error(`${where}: id must be an RFC1123 DNS label`);
+  if (seenDependencyIds.has(dependency.id)) throw new Error(`${where}: duplicate dependency id`);
+  seenDependencyIds.add(dependency.id);
+  if (!String(dependency.capability || '').trim()) throw new Error(`${where}: capability is required`);
+  if (!DEPENDENCY_TYPES.includes(dependency.type)) throw new Error(`${where}: type must be one of ${DEPENDENCY_TYPES.join('|')}`);
+  if (!REQUIRED_FOR.includes(dependency.requiredFor)) throw new Error(`${where}: requiredFor must be one of ${REQUIRED_FOR.join('|')}`);
+  if (dependency.type === 'connection' && !['operator', 'workforce', 'customer'].includes(dependency.scope)) {
+    throw new Error(`${where}: connection dependencies must declare scope`);
+  }
+  if (!dependency.provider?.shell && dependency.manual !== true) throw new Error(`${where}: provider.shell is required unless manual is true`);
+  if (!dependency.verify?.probe) throw new Error(`${where}: verify.probe is required — a dependency must be observable`);
+}
 
 const sdkEntry = resolve(process.env.OPENSPHERE_SDK || resolve(root, '../OpenSphere-SDK'), 'dist/index.js');
 const { validateModulePackage } = await import(pathToFileURL(sdkEntry));

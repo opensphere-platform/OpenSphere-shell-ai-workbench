@@ -63,5 +63,64 @@
       "metrics": true,
       "traces": true
     }
-  }
+  },
+  "dependencies": [
+    {
+      "id": "backbone-postgres",
+      "capability": "data.postgres",
+      "type": "resource",
+      "requiredFor": "Ready",
+      "provider": { "shell": "foundation" },
+      "verify": { "probe": "secretKeys", "namespace": "opensphere-system", "ref": "ai-hub-backbone-postgres", "keys": ["host", "port", "user", "password", "dbname"] },
+      "resolveRoute": "/p/ai-workbench/cluster-settings"
+    },
+    {
+      "id": "backbone-objectstore",
+      "capability": "data.objectstore",
+      "type": "resource",
+      "requiredFor": "Ready",
+      "provider": { "shell": "foundation" },
+      "verify": { "probe": "secretKeys", "namespace": "opensphere-system", "ref": "ai-hub-backbone-rustfs", "keys": ["endpoint"] },
+      "resolveRoute": "/p/ai-workbench/cluster-settings"
+    },
+    {
+      "id": "pipelines-dspo",
+      "capability": "pipeline.dspo",
+      "type": "resource",
+      "requiredFor": "Activate",
+      "manual": true,
+      "provider": { "shell": "cluster-manager" },
+      "verify": { "probe": "crdInstalled", "ref": "datasciencepipelinesapplications.datasciencepipelinesapplications.opendatahub.io" },
+      "resolveRoute": "/p/cluster-manager/add-ons"
+    },
+    {
+      "id": "embedding-route",
+      "capability": "ai.substrate.embedding",
+      "type": "connection",
+      "scope": "operator",
+      "requiredFor": "DataChange",
+      "provider": { "shell": "foundation", "claim": { "apiVersion": "ai.foundation.opensphere.io/v1alpha1", "kind": "LLMRouteClaim" } },
+      "verify": { "probe": "llmRouteEndpoint" },
+      "resolveRoute": "/p/foundation/ai/routes"
+    },
+    {
+      "id": "vector-index",
+      "capability": "data.vector",
+      "type": "resource",
+      "requiredFor": "DataChange",
+      "provider": { "shell": "foundation" },
+      "verify": { "probe": "pgExtension", "ref": "vector" },
+      "resolveRoute": "/p/ai-workbench/cluster-settings"
+    },
+    {
+      "id": "external-gpu",
+      "capability": "compute.gpu.external",
+      "type": "connection",
+      "scope": "operator",
+      "requiredFor": "DataChange",
+      "provider": { "shell": "cluster-manager", "claim": { "apiVersion": "ai.opensphere.io/v1alpha1", "kind": "ComputeBackendClaim" } },
+      "verify": { "probe": "computeBackendReady" },
+      "resolveRoute": "/p/ai-workbench/compute"
+    }
+  ]
 }

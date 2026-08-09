@@ -934,6 +934,154 @@ function buildSpec(page, body, namespace) {
   }
 }
 
+// ── subShell bootstrap: 선언된 의존성의 감지와 집행 ──────────────────────────
+//
+// 소유권 3분할(CONSTITUTION-0003 §10.0 · 0004 규정 2.0.4·§2.2 · 0003 §17 · arch-004 §6):
+//   선언  = 서명 descriptor (이 파일이 읽는 signed manifest 의 dependencies[])
+//   판정  = Console host 공통 lifecycle 표면
+//   발급  = 소유 shell (foundation / cluster-manager)
+// 소비 subShell 인 여기서는 감지·검증·해결경로 제시만 하고 프로비저닝을 하지 않는다.
+//
+// wizard 는 관문이 아니라 원장이다. 미충족 의존성이 메뉴나 라우트를 잠그지 않으며
+// (0006 규정 1.8 · arch-004 §5), requiredFor 에 해당하는 action 만 그 자리에서 막는다.
+
+let _moduleDependencies = null;
+function moduleDependencies() {
+  if (_moduleDependencies) return _moduleDependencies;
+  const candidates = [
+    `${PLUGINS}/ui-shell.manifest.json`,
+    `${__dirname}/ui-shell/ui-shell.manifest.json`,
+    `${__dirname}/ui-shell/ui-shell.manifest.source.json`,
+  ];
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+      if (Array.isArray(parsed?.dependencies)) { _moduleDependencies = parsed.dependencies; return _moduleDependencies; }
+    } catch { /* 다음 후보 */ }
+  }
+  _moduleDependencies = [];
+  return _moduleDependencies;
+}
+
+// 관측 결과는 4값이다. Unknown 을 Satisfied 로 접지 않는다 — 그 접힘이 이 도메인에서
+// 확인된 결함(평가 게이트의 ready→passed)의 근본 패턴이었다.
+async function probeDependency(dependency) {
+  const verify = dependency.verify || {};
+  try {
+    switch (verify.probe) {
+      case 'secretKeys': {
+        const ns = optionalString(verify.namespace) || 'opensphere-system';
+        const secret = await k8sJson(`/api/v1/namespaces/${encodeURIComponent(ns)}/secrets/${encodeURIComponent(verify.ref || '')}`);
+        if (!secret) return { state: 'Pending', evidence: `secret ${ns}/${verify.ref}: not found` };
+        const missing = (verify.keys || []).filter((key) => !decodeSecretValue(secret?.data?.[key]));
+        return missing.length
+          ? { state: 'Pending', evidence: `secret ${ns}/${verify.ref}: missing keys ${missing.join(', ')}` }
+          : { state: 'Satisfied', evidence: `secret ${ns}/${verify.ref}: ${(verify.keys || []).length} key(s) present` };
+      }
+      case 'crdInstalled': {
+        const installed = await crdInstalled(verify.ref || '');
+        return installed
+          ? { state: 'Satisfied', evidence: `crd ${verify.ref}: installed` }
+          : { state: 'Pending', evidence: `crd ${verify.ref}: not installed` };
+      }
+      case 'llmRouteEndpoint': {
+        if (EMBEDDING_MODE === 'simulated') return { state: 'Satisfied', evidence: 'OAH_EMBEDDING_MODE=simulated (non-semantic placeholder)' };
+        if (EMBEDDING_ENDPOINT) return { state: 'Satisfied', evidence: 'OAH_EMBEDDING_ENDPOINT override is set' };
+        const capability = await resolveEmbeddingCapability('opensphere-system');
+        return capability.ready
+          ? { state: 'Satisfied', evidence: `LLMRouteClaim ${capability.route.namespace}/${capability.route.name} published an endpoint` }
+          : { state: 'Pending', evidence: capability.message };
+      }
+      case 'pgExtension': {
+        const rows = await withModelRegistryPg((client) => client.query('select extname from pg_extension where extname = $1', [verify.ref || 'vector']));
+        return rows?.rows?.length
+          ? { state: 'Satisfied', evidence: `postgres extension ${verify.ref}: installed` }
+          : { state: 'Pending', evidence: `postgres extension ${verify.ref}: not installed` };
+      }
+      case 'computeBackendReady': {
+        const list = await k8sJson('/apis/ai.opensphere.io/v1alpha1/computebackendclaims');
+        const ready = (list?.items || []).filter((item) => item?.status?.ready === true);
+        return ready.length
+          ? { state: 'Satisfied', evidence: `${ready.length} ComputeBackendClaim(s) ready` }
+          : { state: 'Pending', evidence: 'no ComputeBackendClaim reports ready' };
+      }
+      default:
+        return { state: 'Unknown', evidence: `unsupported probe: ${verify.probe || '(none)'}` };
+    }
+  } catch (e) {
+    // 관측 실패는 Unknown 이며, Unknown 은 fail-closed 측에 선다.
+    return { state: 'Unknown', evidence: `probe failed: ${e?.msg || e?.message || String(e)}` };
+  }
+}
+
+async function bootstrapDependencyState() {
+  const declared = moduleDependencies();
+  const items = await Promise.all(declared.map(async (dependency) => {
+    const probe = await probeDependency(dependency);
+    return {
+      id: dependency.id,
+      capability: dependency.capability,
+      type: dependency.type,
+      scope: dependency.scope || '',
+      requiredFor: dependency.requiredFor,
+      manual: dependency.manual === true,
+      owner: dependency.provider?.shell || (dependency.manual ? 'manual' : ''),
+      claim: dependency.provider?.claim || null,
+      resolveRoute: dependency.resolveRoute || '',
+      state: probe.state,
+      satisfied: probe.state === 'Satisfied',
+      evidence: probe.evidence,
+    };
+  }));
+  const unmet = items.filter((item) => !item.satisfied);
+  return {
+    declared: items.length,
+    satisfied: items.length - unmet.length,
+    // 선언이 없으면 "충족"이 아니라 "선언 없음"이다. 정직하게 구분한다.
+    phase: !items.length ? 'NoDeclaredDependencies' : unmet.length ? 'DependencyPending' : 'Satisfied',
+    unmetBy: ['Stage', 'Install', 'Activate', 'Ready', 'DataChange'].reduce((acc, stage) => {
+      const blocked = unmet.filter((item) => item.requiredFor === stage).map((item) => item.id);
+      if (blocked.length) acc[stage] = blocked;
+      return acc;
+    }, {}),
+    items,
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+// requiredFor 단계에 걸린 의존성만 막는다. shell 전체를 죽이지 않는 것이 요점이다
+// (arch-003 §6 blanket dependency 금지) — 예: 외부 GPU 부재는 training 제출만 막고
+// 29 페이지는 그대로 살아 있다.
+async function requireSatisfiedDependencies(requiredFor, action, capabilities) {
+  // capabilities 를 주면 그 capability 만 본다. 주지 않으면 해당 단계 전체다.
+  // 단계 전체로 막으면 무관한 의존성(예: GPU 부재)이 무관한 action(예: 문서 색인)을
+  // 죽이는 blanket dependency 가 된다 — arch-003 §6 이 금지하는 형태다.
+  const wanted = Array.isArray(capabilities) && capabilities.length ? new Set(capabilities) : null;
+  const declared = moduleDependencies().filter((dependency) => (
+    dependency.requiredFor === requiredFor && (!wanted || wanted.has(dependency.capability))
+  ));
+  if (!declared.length) return;
+  for (const dependency of declared) {
+    const probe = await probeDependency(dependency);
+    if (probe.state === 'Satisfied') continue;
+    throw {
+      code: 409,
+      msg: 'DependencyPending',
+      details: {
+        action,
+        dependency: dependency.id,
+        capability: dependency.capability,
+        requiredFor,
+        owner: dependency.provider?.shell || (dependency.manual ? 'manual' : ''),
+        resolveRoute: dependency.resolveRoute || '',
+        state: probe.state,
+        evidence: probe.evidence,
+        retryable: true,
+      },
+    };
+  }
+}
+
 async function crdInstalled(crdName) {
   if (!crdName) return true;
   return !!(await k8sJson(`/apis/apiextensions.k8s.io/v1/customresourcedefinitions/${crdName}`));
@@ -6501,6 +6649,8 @@ async function vectorMemoryBootstrap(req) {
 async function vectorMemoryIngest(req) {
   const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
   const actor = await requestActor(req);
+  // 색인이 실제로 쓰는 capability 만 요구한다. GPU 백엔드 부재가 문서 색인을 막지 않는다.
+  await requireSatisfiedDependencies('DataChange', '/memory/vector/ingest', ['ai.substrate.embedding', 'data.vector']);
   const item = await ingestVectorMemoryItem(body, actor);
   return { phase: 'Ingested', item, state: await vectorMemoryState(item.namespace, actor) };
 }
@@ -9240,6 +9390,7 @@ const ADMIN_READ_PATHS = new Set([
   '/admin/setup/status',
   '/admin/setup/plan',
   '/admin/cluster-settings',
+  '/admin/native/dependencies',
   '/memory/vector',
   '/operations/ledger',
 ]);
@@ -17054,6 +17205,8 @@ const server = http.createServer(async (req, res) => {
     if (p === '/admin/native/controller-metrics' && req.method === 'GET') return jsonRes(res, 200, await nativeControllerMetricsWithAuditFallback());
     if (p === '/admin/native/audit-log' && req.method === 'GET') return jsonRes(res, 200, await nativeAuditLog());
     if (p === '/admin/native/final-readiness' && req.method === 'GET') return jsonRes(res, 200, await finalReadiness(req));
+    // 선언된 의존성의 현재 충족 상태(원장). 이 값이 메뉴를 잠그지는 않는다.
+    if (p === '/admin/native/dependencies' && req.method === 'GET') return jsonRes(res, 200, await bootstrapDependencyState());
     if (p === '/admin/native/gpu-inventory' && req.method === 'GET') return jsonRes(res, 200, await gpuInventory());
     if (p === '/admin/native/gpu-enablement-plan' && req.method === 'GET') return jsonRes(res, 200, await gpuEnablementPlan(req));
     if (p === '/admin/native/compute-routing' && req.method === 'GET') return jsonRes(res, 200, await computeRouting());
