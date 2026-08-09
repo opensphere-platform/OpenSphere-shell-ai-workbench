@@ -1,12 +1,17 @@
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const PORT = Number(process.env.PORT || 18080);
 const BIND = process.env.OSP_GPU_BRIDGE_BIND || '0.0.0.0';
-const TOKEN = process.env.OSP_GPU_BRIDGE_TOKEN || 'dev-token';
+// 기본 토큰은 없다. 종전의 'dev-token' 기본값은 설정을 잊은 배포를 조용히 무방비로 만들었다.
+const TOKEN = process.env.OSP_GPU_BRIDGE_TOKEN || '';
+if (!TOKEN) {
+  console.error('[opensphere-gpu-bridge] OSP_GPU_BRIDGE_TOKEN is required. Refusing to start without a bearer token.');
+  process.exit(1);
+}
 const MAX_CONCURRENCY = Math.max(1, Number(process.env.OSP_GPU_BRIDGE_MAX_CONCURRENCY || 1) || 1);
 const PROVIDER = process.env.OSP_GPU_BRIDGE_PROVIDER || 'docker-gpu';
 const DATA_DIR = process.env.OSP_GPU_BRIDGE_DATA_DIR || '/data';
@@ -36,9 +41,16 @@ function methodNotAllowed(res) {
   json(res, 405, { error: 'MethodNotAllowed', message: 'Method is not allowed for this endpoint.' });
 }
 
+// 토큰 비교는 상수시간으로 한다. 문자열 === 비교는 일치하는 접두사 길이만큼 시간이 달라져
+// 토큰을 한 바이트씩 추측할 여지를 준다.
 function isAuthorized(req) {
-  const header = req.headers.authorization || '';
-  return header === `Bearer ${TOKEN}`;
+  const header = String(req.headers.authorization || '');
+  const match = header.match(/^Bearer\s+(.+)$/);
+  if (!match) return false;
+  const presented = Buffer.from(match[1]);
+  const expected = Buffer.from(TOKEN);
+  if (presented.length !== expected.length) return false;
+  return timingSafeEqual(presented, expected);
 }
 
 async function readJson(req) {

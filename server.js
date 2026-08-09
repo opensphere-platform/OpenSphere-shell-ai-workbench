@@ -2152,19 +2152,138 @@ async function reconcileExternalTrainingJobClaim(target, claim, backend) {
   };
 }
 
+// TrainingJobClaim -> batch/v1 Job.
+//
+// 학습기(runnerImage/command)가 선언되지 않으면 학습하는 척하지 않는다. 대신 dataset·backend
+// 참조를 실제로 점검하는 preflight 를 돌리고 status.trainer 를 'preflight' 로 남긴다.
+// 종전에는 어떤 Job 도 만들지 않고 'Ready/TrainingJobPrepared' 만 찍었다.
+const TRAINING_PREFLIGHT_SCRIPT = [
+  'set -eu',
+  'echo "[training] claim=${OPENSPHERE_TRAINING_CLAIM}"',
+  'echo "[training] framework=${OPENSPHERE_TRAINING_FRAMEWORK} mode=${OPENSPHERE_TRAINING_MODE}"',
+  'echo "[training] dataset=${OPENSPHERE_TRAINING_DATASET:-<unset>}"',
+  'echo "[training] compute-backend=${OPENSPHERE_TRAINING_BACKEND:-<unset>}"',
+  'if [ -z "${OPENSPHERE_TRAINING_DATASET:-}" ]; then echo "[training] FAIL no datasetRef"; exit 1; fi',
+  'echo "[training] preflight ok — no trainer image configured, nothing was trained"',
+].join('\n');
+
+function trainingJobResources(claim) {
+  const namespace = claim.metadata?.namespace || 'default';
+  const claimName = claim.metadata?.name || 'training-job';
+  const name = dnsLabel(`${claimName}-train`, 'osai-').slice(0, 60);
+  const spec = claim.spec || {};
+  const suspended = spec.suspended === true;
+  const runnerImage = optionalString(spec.runnerImage || spec.image);
+  const command = Array.isArray(spec.command) && spec.command.length ? spec.command : null;
+  const trainer = runnerImage && command ? 'configured' : 'preflight';
+  const preflightImage = optionalString(process.env.TRAINING_PREFLIGHT_IMAGE) || PIPELINE_RUNNER_IMAGE;
+  const image = trainer === 'configured' ? runnerImage : preflightImage;
+  const labels = {
+    'app.kubernetes.io/name': name,
+    'app.kubernetes.io/part-of': 'opensphere-ai',
+    'ai.opensphere.io/training-job-claim': claimName,
+    'ai.opensphere.io/trainer': trainer,
+  };
+  const env = [
+    { name: 'OPENSPHERE_TRAINING_CLAIM', value: claimName },
+    { name: 'OPENSPHERE_TRAINING_FRAMEWORK', value: optionalString(spec.framework) || 'unset' },
+    { name: 'OPENSPHERE_TRAINING_MODE', value: optionalString(spec.trainingMode) || 'unset' },
+    { name: 'OPENSPHERE_TRAINING_DATASET', value: optionalString(spec.datasetRef?.name) },
+    { name: 'OPENSPHERE_TRAINING_BACKEND', value: optionalString(spec.computeBackendRef?.name) },
+  ];
+  const container = trainer === 'configured'
+    ? { name: 'trainer', image, imagePullPolicy: 'IfNotPresent', command, env }
+    : { name: 'preflight', image, imagePullPolicy: 'IfNotPresent', command: ['sh', '-c', TRAINING_PREFLIGHT_SCRIPT], env };
+  const gpuClass = optionalString(spec.gpuClass);
+  const gpuCount = Number(spec.gpuCount || 0);
+  // 외부 브리지 GPU 는 K8s extended resource 가 아니므로 Pod 에 실을 수 없다.
+  if (gpuClass && gpuCount > 0 && gpuClass.includes('/') && !gpuClass.startsWith('external.')) {
+    container.resources = { requests: { [gpuClass]: String(gpuCount) }, limits: { [gpuClass]: String(gpuCount) } };
+  }
+  const job = {
+    apiVersion: 'batch/v1',
+    kind: 'Job',
+    metadata: { name, namespace, labels, ownerReferences: ownerRefFor(claim) },
+    spec: {
+      suspend: suspended,
+      backoffLimit: 0,
+      ttlSecondsAfterFinished: 3600,
+      template: {
+        metadata: { labels },
+        spec: {
+          restartPolicy: 'Never',
+          // serviceAccountName 은 반드시 명시한다. 클러스터 admission policy 가 이 필드의
+          // 존재를 전제하고 CEL 로 검사하므로, 생략하면 "no such key" 로 Job 이 거부된다.
+          serviceAccountName: optionalString(spec.serviceAccountName) || 'default',
+          containers: [container],
+        },
+      },
+    },
+  };
+  return { name, namespace, job, suspended, trainer, image };
+}
+
+async function cleanupTrainingJobResources(claim) {
+  const { name, namespace } = trainingJobResources(claim);
+  const removed = await deleteK8sIfExists(`/apis/batch/v1/namespaces/${namespace}/jobs/${name}`).catch(() => false);
+  return { deleted: removed ? 1 : 0, names: removed ? [name] : [] };
+}
+
 async function reconcileTrainingJobClaim(target, claim) {
   const backend = await computeBackendForTrainingClaim(claim);
   if (backend && isExternalComputeBackend(backend)) {
     return reconcileExternalTrainingJobClaim(target, claim, backend);
   }
-  const status = passiveStatus(claim, target);
-  await patchPassiveStatus(claim, target, status);
-  return {
-    name: claim.metadata?.name || '',
-    namespace: claim.metadata?.namespace || '',
-    phase: status.phase,
-    backendMode: status.backendMode,
+  const resources = trainingJobResources(claim);
+  const { name, namespace, job, suspended, trainer, image } = resources;
+  const cleanup = await cleanupClaimResources(claim, 'trainingjobclaims', cleanupTrainingJobResources);
+  if (cleanup) return cleanup;
+  await ensureClaimFinalizer(claim, 'trainingjobclaims');
+  // 실행할 이미지가 없으면 잘못된 Job 을 만들지 않고 의존성 미충족으로 정직하게 보고한다.
+  if (!image) {
+    const status = {
+      ...normalizedStatus({
+        phase: 'DependencyPending',
+        ready: false,
+        reason: 'TrainerImageNotConfigured',
+        message: 'No trainer image is configured. Set spec.runnerImage with spec.command, or TRAINING_PREFLIGHT_IMAGE on the runtime.',
+      }),
+      backendMode: 'opensphere',
+      trainer,
+      producesModel: false,
+      observedGeneration: claim.metadata?.generation || 0,
+      lastReconciledAt: new Date().toISOString(),
+    };
+    await patchPassiveStatus(claim, target, status);
+    return { name: claim.metadata?.name || '', namespace, phase: status.phase, trainer };
+  }
+  await upsertK8s(
+    `/apis/batch/v1/namespaces/${namespace}/jobs`,
+    `/apis/batch/v1/namespaces/${namespace}/jobs/${name}`,
+    job,
+    { metadata: { labels: job.metadata.labels }, spec: { suspend: suspended } },
+    null,
+  );
+  const current = await k8sJson(`/apis/batch/v1/namespaces/${namespace}/jobs/${name}`);
+  const normalized = normalizeJobStatus(current, suspended, {
+    succeededMessage: trainer === 'configured'
+      ? 'Training job completed.'
+      : 'Training preflight completed. No trainer image was configured, so no model was produced.',
+    pendingMessage: 'Training job is Pending.',
+  });
+  const status = {
+    ...normalized,
+    backendMode: 'opensphere',
+    backendResource: `batch/v1/Job/${namespace}/${name}`,
+    jobName: name,
+    trainer,
+    // 학습기가 없으면 결과물이 없다는 사실을 상태에 남긴다.
+    producesModel: trainer === 'configured',
+    observedGeneration: claim.metadata?.generation || 0,
+    lastReconciledAt: new Date().toISOString(),
   };
+  await patchPassiveStatus(claim, target, status);
+  return { name: claim.metadata?.name || '', namespace, jobName: name, phase: status.phase, trainer };
 }
 
 async function reconcilePassiveResources() {
@@ -2457,15 +2576,15 @@ function pipelineRunResources(claim) {
     'ai.opensphere.io/pipeline-run-claim': claim.metadata?.name || '',
   };
   const ownerReferences = ownerRefFor(claim);
+  // 이 fallback 러너는 실제 파이프라인 단계를 실행하지 않는다. 업스트림(KFP/Tekton)이
+  // 없을 때 배관을 확인하는 용도이므로, 로그가 진짜 실행처럼 읽히지 않게 명시한다.
   const script = [
     "const env=process.env;",
     "const params=JSON.parse(env.OPENSPHERE_PIPELINE_PARAMETERS||'{}');",
-    "console.log(`[pipeline] starting ${env.OPENSPHERE_PIPELINE_RUN} for ${env.OPENSPHERE_PIPELINE}`);",
-    "console.log(`[pipeline] parameters ${JSON.stringify(params)}`);",
-    "console.log('[pipeline] resolving inputs');",
-    "console.log('[pipeline] running execution steps');",
-    "console.log('[pipeline] publishing artifacts');",
-    "console.log('[pipeline] completed successfully');",
+    "console.log(`[pipeline][simulated] run=${env.OPENSPHERE_PIPELINE_RUN} pipeline=${env.OPENSPHERE_PIPELINE}`);",
+    "console.log(`[pipeline][simulated] parameters ${JSON.stringify(params)}`);",
+    "console.log('[pipeline][simulated] no Kubeflow Pipelines or Tekton backend is installed;');",
+    "console.log('[pipeline][simulated] this runner validates plumbing only and executes no pipeline step.');",
   ].join('');
   const job = {
     apiVersion: 'batch/v1',
@@ -3056,8 +3175,12 @@ async function reconcilePipelineRunClaim(claim) {
       ...baseStatus,
       backendResource: `batch/v1/Job/${namespace}/${name}`,
       ...normalized,
+      // 이 경로는 업스트림 백엔드 없이 도는 fallback 이다. Succeeded 가 "파이프라인이
+      // 실행됐다"로 읽히지 않도록 상태에 시뮬레이션임을 남긴다.
+      simulated: true,
+      simulatedReason: 'NoUpstreamPipelineBackend',
     }));
-    return { name: claim.metadata?.name, namespace, jobName: name, phase: normalized.phase };
+    return { name: claim.metadata?.name, namespace, jobName: name, phase: normalized.phase, simulated: true };
   } catch (e) {
     const status = retryStatus(claim, baseStatus, e);
     await patchPipelineRunStatus(claim, status);
@@ -3104,11 +3227,13 @@ function inferenceResources(claim) {
     "const claim=process.env.OPENSPHERE_INFERENCE_CLAIM||'inference';",
     "function send(res,code,obj){res.writeHead(code,{'content-type':'application/json'});res.end(JSON.stringify(obj));}",
     "http.createServer((req,res)=>{",
-    " if(req.url==='/healthz') return send(res,200,{ok:true,model,runtime,claim});",
+    " if(req.url==='/healthz') return send(res,200,{ok:true,model,runtime,claim,simulated:true});",
     " let body=''; req.on('data',c=>body+=c);",
     " req.on('end',()=>{",
     "  let input=null; try{input=body?JSON.parse(body):null;}catch{input=body;}",
-    "  if(req.url.includes('/predict')||req.url==='/infer') return send(res,200,{model,runtime,claim,predictions:[{label:'opensphere-ready',score:1}], input});",
+    // 이 fallback 런타임은 모델 가중치를 적재하지 않는다. 고정값을 예측처럼 돌려주면
+    // 소비자가 진짜 추론으로 오인하므로, 예측을 만들지 않고 시뮬레이션임을 명시한다.
+    "  if(req.url.includes('/predict')||req.url==='/infer') return send(res,501,{model,runtime,claim,simulated:true,error:'NoModelLoaded',message:'OpenSphere fallback serving runtime does not load model weights. Deploy a real serving runtime (for example KServe with vLLM) to get predictions.', input});",
     "  return send(res,200,{model,runtime,claim,endpoints:['/healthz','/v1/models/'+model+'/predict','/infer']});",
     " });",
     "}).listen(8080,'0.0.0.0',()=>console.log('[inference] '+claim+' serving '+model+' with '+runtime));",
@@ -3331,8 +3456,12 @@ async function reconcileInferenceClaim(claim) {
       ...baseStatus,
       backendResource: `apps/v1/Deployment/${namespace}/${name}`,
       ...normalized,
+      // fallback 서빙 런타임은 모델 가중치를 적재하지 않는다. Ready 가 "모델이 응답한다"로
+      // 읽히지 않도록 상태에 남긴다(예측 엔드포인트는 501 로 응답한다).
+      simulated: true,
+      simulatedReason: 'FallbackRuntimeLoadsNoModel',
     }));
-    return { name: claim.metadata?.name, namespace, runtimeName: name, phase: normalized.phase, governance: servingGate };
+    return { name: claim.metadata?.name, namespace, runtimeName: name, phase: normalized.phase, governance: servingGate, simulated: true };
   } catch (e) {
     const status = retryStatus(claim, baseStatus, e);
     await patchInferenceStatus(claim, status);
@@ -7399,7 +7528,9 @@ async function reconcileEvaluationJob(job) {
   const policy = await evaluationPolicyState(spec.policyRef, namespace);
   const metrics = normalizedEvaluationMetrics(job, policy, now);
   const failed = metrics.filter((metric) => metric.passed === false);
-  const passed = metrics.length ? failed.length === 0 : spec.passed === true || ['passed', 'succeeded', 'ready'].includes(optionalString(spec.phase).toLowerCase());
+  // 측정된 메트릭이 없으면 통과로 판정하지 않는다. 종전에는 요청자가 spec.passed 나
+  // spec.phase 를 직접 써서 아무 측정 없이 Passed 를 만들 수 있었다(승격 게이트 우회).
+  const passed = metrics.length > 0 && failed.length === 0;
   const suspended = spec.suspended === true;
   const phase = suspended ? 'Suspended' : passed ? 'Passed' : metrics.length ? 'Failed' : 'Pending';
   const status = {
@@ -7443,9 +7574,12 @@ async function evaluationState(refObj, namespace) {
   const job = await k8sJson(`/apis/eval.ai.opensphere.io/v1alpha1/namespaces/${ns}/evaluationjobs/${name}`);
   if (!job) return { found: false, passed: false, phase: 'MissingEvaluation' };
   const phase = job.status?.phase || job.spec?.phase || '';
-  const ready = job.status?.ready === true || (job.status?.conditions || []).some((condition) => condition.type === 'Ready' && condition.status === 'True');
-  const passed = job.status?.passed === true || ['passed', 'succeeded', 'ready'].includes(String(phase).toLowerCase()) || ready;
-  return { found: true, passed, phase: phase || (passed ? 'Passed' : 'Pending'), job };
+  // ready 는 "판정이 끝났다"는 신호이지 "통과했다"가 아니다. reconcileEvaluationJob 은
+  // phase 가 Passed 든 Failed 든 ready=true 를 기록하므로, ready 를 통과로 읽으면
+  // 평가에 실패한 모델이 승격 게이트를 통과한다. 통과 여부는 status.passed 가 정본이다.
+  const adjudicated = job.status?.ready === true || (job.status?.conditions || []).some((condition) => condition.type === 'Ready' && condition.status === 'True');
+  const passed = job.status?.passed === true || ['passed', 'succeeded'].includes(String(phase).toLowerCase());
+  return { found: true, passed, adjudicated, phase: phase || (passed ? 'Passed' : 'Pending'), job };
 }
 
 function artifactUriFromObject(obj) {
@@ -7518,6 +7652,9 @@ async function reconcileModelPromotionClaim(claim) {
   const approved = spec.approved === true || annotationApproval === 'true' || annotationDecision === 'approved';
   const rejected = spec.approved === false || annotationApproval === 'false' || annotationDecision === 'rejected' || stage === 'rejected';
   const canPromote = !rejected && (approved || evaluation.passed);
+  // 승인만으로 승격되는 경로를 조용히 두지 않는다. 평가가 없거나 통과하지 않은 채
+  // 승인으로 승격되면 그 사실을 상태에 남겨 감사에서 식별할 수 있게 한다.
+  const promotedWithoutEvaluation = canPromote && approved && evaluation.passed !== true;
   const now = new Date().toISOString();
   const separationOfDuties = promotionSeparationOfDuties(claim, approved);
   const baseStatus = {
@@ -7531,6 +7668,8 @@ async function reconcileModelPromotionClaim(claim) {
     evaluationRef: spec.evaluationRef?.name || '',
     evaluationPhase: evaluation.phase,
     evaluationPassed: evaluation.passed === true,
+    evaluationAdjudicated: evaluation.adjudicated === true,
+    promotedWithoutEvaluation,
     backendMode: registryBackend.backend.mode,
     backendRequested: registryBackend.backend.requested,
     backendPhase: registryBackend.backend.phase,
@@ -14187,9 +14326,45 @@ async function readGpuBridgeToken(namespace, name) {
   return token || process.env.OSP_GPU_BRIDGE_TOKEN || '';
 }
 
+// GPU bridge 는 정의상 클러스터 밖 호스트다. 따라서 loopback·링크로컬(클라우드 메타데이터)·
+// 클러스터 내부 서비스 DNS 로는 절대 요청하지 않는다. 이 검사가 없으면 호출자가 지정한 임의
+// 주소로 서버가 Secret 토큰을 Bearer 로 실어 보낼 수 있다(SSRF + 자격증명 유출).
+const GPU_BRIDGE_BLOCKED_HOST_PATTERNS = [
+  /^localhost$/i,
+  /^127\./,
+  /^\[?::1\]?$/,
+  /^0\.0\.0\.0$/,
+  /^169\.254\./, // 링크로컬 — AWS/GCP/Azure 인스턴스 메타데이터
+  /^\[?fe80:/i,
+  /(^|\.)svc$/i,
+  /(^|\.)svc\.cluster\.local$/i,
+  /^kubernetes\.default(\.|$)/i,
+  /^metadata\.google\.internal$/i,
+];
+
+// 값이 설정되면 이 목록이 정본이 된다(운영 환경에서 등록된 백엔드만 허용하고 싶을 때).
+const GPU_BRIDGE_HOST_ALLOWLIST = String(process.env.OSP_GPU_BRIDGE_HOST_ALLOWLIST || '')
+  .split(',')
+  .map((entry) => entry.trim().toLowerCase())
+  .filter(Boolean);
+
+function assertGpuBridgeHostAllowed(hostname) {
+  const host = String(hostname || '').toLowerCase();
+  if (GPU_BRIDGE_HOST_ALLOWLIST.length) {
+    if (!GPU_BRIDGE_HOST_ALLOWLIST.includes(host)) {
+      throw { code: 400, msg: 'EndpointNotAllowed', details: `Host ${host} is not in OSP_GPU_BRIDGE_HOST_ALLOWLIST.` };
+    }
+    return;
+  }
+  if (GPU_BRIDGE_BLOCKED_HOST_PATTERNS.some((pattern) => pattern.test(host))) {
+    throw { code: 400, msg: 'EndpointNotAllowed', details: `Host ${host} is loopback, link-local, or cluster-internal and cannot be a GPU bridge.` };
+  }
+}
+
 function bridgeUrl(endpoint, pathName) {
   if (!validHttpEndpoint(endpoint)) throw { code: 400, msg: 'InvalidEndpoint', details: 'Endpoint must be an http:// or https:// URL reachable from OAH.' };
   const url = new URL(endpoint);
+  assertGpuBridgeHostAllowed(url.hostname);
   url.pathname = `${url.pathname.replace(/\/$/, '')}${pathName}`;
   return url.toString();
 }
