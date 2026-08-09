@@ -1,0 +1,508 @@
+From a9d76305051f994fe638bd84552b6a92ed3e7ca2 Mon Sep 17 00:00:00 2001
+From: CMARS <cmars@triangles.co.kr>
+Date: Sun, 9 Aug 2026 19:04:53 +0900
+Subject: feat(opensphere): PostgreSQL dialect via opensphere-pgx driver
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+OpenSphere Backbone 은 PostgreSQL 을 데이터 권위로 쓰는데 DSP API server 는
+MySQL 방언을 전제한다. 이 패치는 pgx 기반 driver 를 추가하고 storage 계층이
+PostgreSQL 방언을 선택할 수 있게 한다.
+
+- opensphere_pgx_driver.go: ?->$N 리바인딩, 식별자 quoting, GROUP BY 확장
+- client_manager.go: opensphere-pgx driver 등록/선택
+- storage/db.go: PostgreSQL 방언 분기
+
+base: fdfb9ac (opendatahub-io/data-science-pipelines master, VERSION 2.16.1)
+---
+ .../client_manager/client_manager.go          |  14 +-
+ .../client_manager/opensphere_pgx_driver.go   | 313 ++++++++++++++++++
+ backend/src/apiserver/storage/db.go           |  64 ++++
+ 3 files changed, 389 insertions(+), 2 deletions(-)
+ create mode 100644 backend/src/apiserver/client_manager/opensphere_pgx_driver.go
+
+diff --git a/backend/src/apiserver/client_manager/client_manager.go b/backend/src/apiserver/client_manager/client_manager.go
+index 41b7b95..e9096ce 100644
+--- a/backend/src/apiserver/client_manager/client_manager.go
++++ b/backend/src/apiserver/client_manager/client_manager.go
+@@ -369,7 +369,10 @@ func InitDBClient(initConnectionTimeout time.Duration) *storage.DB {
+ 			DefaultStringSize: 255,
+ 		})
+ 	case "pgx":
+-		dialector = postgres.Open(arg)
++		dialector = postgres.New(postgres.Config{
++			DSN:        arg,
++			DriverName: openspherePGXDriverName,
++		})
+ 	default:
+ 		glog.Fatalf("Unsupported driver %v", driverName)
+ 	}
+@@ -399,6 +402,9 @@ func InitDBClient(initConnectionTimeout time.Duration) *storage.DB {
+ 	if err != nil {
+ 		glog.Fatalf("Failed to retrieve *sql.DB from gorm.DB. Error: %v", err)
+ 	}
++	if driverName == "pgx" {
++		return storage.NewDB(newdb, storage.NewPostgreSQLDialect())
++	}
+ 	return storage.NewDB(newdb, storage.NewMySQLDialect())
+ }
+ 
+@@ -437,7 +443,11 @@ func initDBDriver(driverName string, initConnectionTimeout time.Duration) string
+ 	var db *sql.DB
+ 	var err error
+ 	operation := func() error {
+-		db, err = sql.Open(driverName, sqlConfig)
++		sqlDriverName := driverName
++		if driverName == "pgx" {
++			sqlDriverName = openspherePGXDriverName
++		}
++		db, err = sql.Open(sqlDriverName, sqlConfig)
+ 		if err != nil {
+ 			return err
+ 		}
+diff --git a/backend/src/apiserver/client_manager/opensphere_pgx_driver.go b/backend/src/apiserver/client_manager/opensphere_pgx_driver.go
+new file mode 100644
+index 0000000..55d84af
+--- /dev/null
++++ b/backend/src/apiserver/client_manager/opensphere_pgx_driver.go
+@@ -0,0 +1,313 @@
++package clientmanager
++
++import (
++	"context"
++	"database/sql"
++	"database/sql/driver"
++	"strconv"
++	"strings"
++
++	"github.com/jackc/pgx/v5/stdlib"
++)
++
++const openspherePGXDriverName = "opensphere-pgx"
++
++func init() {
++	sql.Register(openspherePGXDriverName, &questionPlaceholderDriver{inner: stdlib.GetDefaultDriver()})
++}
++
++type questionPlaceholderDriver struct {
++	inner driver.Driver
++}
++
++func (d *questionPlaceholderDriver) Open(name string) (driver.Conn, error) {
++	conn, err := d.inner.Open(name)
++	if err != nil {
++		return nil, err
++	}
++	return &questionPlaceholderConn{Conn: conn}, nil
++}
++
++func (d *questionPlaceholderDriver) OpenConnector(name string) (driver.Connector, error) {
++	if dc, ok := d.inner.(driver.DriverContext); ok {
++		connector, err := dc.OpenConnector(name)
++		if err != nil {
++			return nil, err
++		}
++		return &questionPlaceholderConnector{inner: connector, driver: d}, nil
++	}
++	return nil, driver.ErrSkip
++}
++
++type questionPlaceholderConnector struct {
++	inner  driver.Connector
++	driver driver.Driver
++}
++
++func (c *questionPlaceholderConnector) Connect(ctx context.Context) (driver.Conn, error) {
++	conn, err := c.inner.Connect(ctx)
++	if err != nil {
++		return nil, err
++	}
++	return &questionPlaceholderConn{Conn: conn}, nil
++}
++
++func (c *questionPlaceholderConnector) Driver() driver.Driver {
++	return c.driver
++}
++
++type questionPlaceholderConn struct {
++	driver.Conn
++}
++
++func (c *questionPlaceholderConn) Prepare(query string) (driver.Stmt, error) {
++	return c.Conn.Prepare(rebindQuestionPlaceholders(query))
++}
++
++func (c *questionPlaceholderConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
++	if pc, ok := c.Conn.(driver.ConnPrepareContext); ok {
++		return pc.PrepareContext(ctx, rebindQuestionPlaceholders(query))
++	}
++	return c.Prepare(query)
++}
++
++func (c *questionPlaceholderConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
++	if execer, ok := c.Conn.(driver.ExecerContext); ok {
++		return execer.ExecContext(ctx, rebindQuestionPlaceholders(query), args)
++	}
++	return nil, driver.ErrSkip
++}
++
++func (c *questionPlaceholderConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
++	if queryer, ok := c.Conn.(driver.QueryerContext); ok {
++		return queryer.QueryContext(ctx, rebindQuestionPlaceholders(query), args)
++	}
++	return nil, driver.ErrSkip
++}
++
++func (c *questionPlaceholderConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
++	if beginner, ok := c.Conn.(driver.ConnBeginTx); ok {
++		return beginner.BeginTx(ctx, opts)
++	}
++	return nil, driver.ErrSkip
++}
++
++func (c *questionPlaceholderConn) Ping(ctx context.Context) error {
++	if pinger, ok := c.Conn.(driver.Pinger); ok {
++		return pinger.Ping(ctx)
++	}
++	return nil
++}
++
++func (c *questionPlaceholderConn) CheckNamedValue(v *driver.NamedValue) error {
++	if checker, ok := c.Conn.(driver.NamedValueChecker); ok {
++		return checker.CheckNamedValue(v)
++	}
++	return driver.ErrSkip
++}
++
++func (c *questionPlaceholderConn) ResetSession(ctx context.Context) error {
++	if resetter, ok := c.Conn.(driver.SessionResetter); ok {
++		return resetter.ResetSession(ctx)
++	}
++	return nil
++}
++
++func (c *questionPlaceholderConn) IsValid() bool {
++	if validator, ok := c.Conn.(driver.Validator); ok {
++		return validator.IsValid()
++	}
++	return true
++}
++
++func rebindQuestionPlaceholders(query string) string {
++	if shouldQuotePostgresIdentifiers(query) {
++		query = quoteKnownPostgresIdentifiers(query)
++		query = normalizePostgresGroupBy(query)
++	}
++	if !strings.Contains(query, "?") {
++		return query
++	}
++
++	var b strings.Builder
++	b.Grow(len(query) + 8)
++	index := 1
++	inSingle := false
++	inDouble := false
++
++	for i := 0; i < len(query); i++ {
++		ch := query[i]
++		switch ch {
++		case '\'':
++			b.WriteByte(ch)
++			if !inDouble {
++				if inSingle && i+1 < len(query) && query[i+1] == '\'' {
++					i++
++					b.WriteByte(query[i])
++					continue
++				}
++				inSingle = !inSingle
++			}
++		case '"':
++			b.WriteByte(ch)
++			if !inSingle {
++				inDouble = !inDouble
++			}
++		case '?':
++			if inSingle || inDouble {
++				b.WriteByte(ch)
++				continue
++			}
++			b.WriteByte('$')
++			b.WriteString(strconv.Itoa(index))
++			index++
++		default:
++			b.WriteByte(ch)
++		}
++	}
++	return b.String()
++}
++
++func normalizePostgresGroupBy(query string) string {
++	replacements := map[string]string{
++		`GROUP BY jobs."UUID"`:  `GROUP BY ` + qualifiedColumns("jobs", jobStoreColumns),
++		`GROUP BY rd."UUID"`:    `GROUP BY ` + qualifiedColumns("rd", runStoreColumns),
++		`GROUP BY rdref."UUID"`: `GROUP BY ` + qualifiedColumns("rdref", append(runStoreColumns, "refs")),
++		`GROUP BY subq."UUID"`:  `GROUP BY ` + qualifiedColumns("subq", append(runStoreColumns, "refs", "taskDetails")),
++	}
++	for old, replacement := range replacements {
++		query = strings.ReplaceAll(query, old, replacement)
++	}
++	return query
++}
++
++var jobStoreColumns = []string{
++	"UUID", "DisplayName", "Name", "Namespace", "ServiceAccount", "Description",
++	"MaxConcurrency", "NoCatchup", "CreatedAtInSec", "UpdatedAtInSec", "Enabled",
++	"CronScheduleStartTimeInSec", "CronScheduleEndTimeInSec", "Schedule",
++	"PeriodicScheduleStartTimeInSec", "PeriodicScheduleEndTimeInSec", "IntervalSecond",
++	"PipelineId", "PipelineName", "PipelineSpecManifest", "WorkflowSpecManifest",
++	"Parameters", "Conditions", "RuntimeParameters", "PipelineRoot", "ExperimentUUID",
++	"PipelineVersionId", "PluginsInput",
++}
++
++var runStoreColumns = []string{
++	"UUID", "ExperimentUUID", "DisplayName", "Name", "StorageState", "Namespace",
++	"ServiceAccount", "Description", "CreatedAtInSec", "ScheduledAtInSec",
++	"FinishedAtInSec", "Conditions", "PipelineId", "PipelineVersionId",
++	"PipelineName", "PipelineSpecManifest", "WorkflowSpecManifest", "Parameters",
++	"RuntimeParameters", "PipelineRoot", "PipelineRuntimeManifest",
++	"WorkflowRuntimeManifest", "JobUUID", "State", "StateHistory", "PluginsInput",
++	"PluginsOutput", "PipelineContextId", "PipelineRunContextId",
++}
++
++func qualifiedColumns(alias string, columns []string) string {
++	qualified := make([]string, 0, len(columns))
++	for _, column := range columns {
++		if column == "refs" || column == "taskDetails" {
++			qualified = append(qualified, alias+"."+column)
++			continue
++		}
++		qualified = append(qualified, alias+`."`+column+`"`)
++	}
++	return strings.Join(qualified, ", ")
++}
++
++func shouldQuotePostgresIdentifiers(query string) bool {
++	lower := strings.ToLower(query)
++	return !strings.Contains(lower, "information_schema.") &&
++		!strings.Contains(lower, "pg_catalog.") &&
++		!strings.Contains(lower, "current_schema()")
++}
++
++var postgresIdentifierRewrites = buildPostgresIdentifierRewrites()
++
++func buildPostgresIdentifierRewrites() map[string]string {
++	columns := []string{
++		"UUID", "DisplayName", "Name", "Namespace", "ServiceAccount", "Description",
++		"MaxConcurrency", "NoCatchup", "CreatedAtInSec", "UpdatedAtInSec", "Enabled",
++		"CronScheduleStartTimeInSec", "CronScheduleEndTimeInSec", "Schedule",
++		"PeriodicScheduleStartTimeInSec", "PeriodicScheduleEndTimeInSec", "IntervalSecond",
++		"PipelineId", "PipelineName", "PipelineSpecManifest", "WorkflowSpecManifest",
++		"Parameters", "Conditions", "RuntimeParameters", "PipelineRoot", "ExperimentUUID",
++		"PipelineVersionId", "PluginsInput", "PluginsOutput", "DefaultExperimentId",
++		"HaveSamplesLoaded", "LastRunCreatedAtInSec", "StorageState", "Status",
++		"DefaultVersionId", "CodeSourceUrl", "PipelineSpec", "PipelineSpecURI",
++		"ResourceUUID", "ResourceType", "ReferenceUUID", "ReferenceName", "ReferenceType",
++		"Relationship", "Payload", "ScheduledAtInSec", "FinishedAtInSec",
++		"PipelineRuntimeManifest", "WorkflowRuntimeManifest", "JobUUID", "State",
++		"StateHistory", "PipelineContextId", "PipelineRunContextId", "RunUUID", "NodeID",
++		"NumberValue", "Format", "PodName", "MLMDExecutionID", "CreatedTimestamp",
++		"StartedTimestamp", "FinishedTimestamp", "Fingerprint", "ParentTaskUUID",
++		"MLMDInputs", "MLMDOutputs", "ChildrenPods", "PipelineID", "PipelineVersionID",
++		"PipelineVersionId", "TagKey", "TagValue",
++	}
++
++	rewrites := make(map[string]string, len(columns)*2)
++	for _, column := range columns {
++		quoted := `"` + column + `"`
++		rewrites[column] = quoted
++		rewrites[strings.ToLower(column)] = quoted
++	}
++	return rewrites
++}
++
++func quoteKnownPostgresIdentifiers(query string) string {
++	var b strings.Builder
++	b.Grow(len(query) + 16)
++	inSingle := false
++	inDouble := false
++
++	for i := 0; i < len(query); {
++		ch := query[i]
++		switch ch {
++		case '\'':
++			b.WriteByte(ch)
++			i++
++			if !inDouble {
++				if inSingle && i < len(query) && query[i] == '\'' {
++					b.WriteByte(query[i])
++					i++
++					continue
++				}
++				inSingle = !inSingle
++			}
++			continue
++		case '"':
++			b.WriteByte(ch)
++			i++
++			if !inSingle {
++				inDouble = !inDouble
++			}
++			continue
++		}
++
++		if inSingle || inDouble || !isIdentifierStart(ch) {
++			b.WriteByte(ch)
++			i++
++			continue
++		}
++
++		start := i
++		i++
++		for i < len(query) && isIdentifierPart(query[i]) {
++			i++
++		}
++		token := query[start:i]
++		if replacement, ok := postgresIdentifierRewrites[token]; ok {
++			b.WriteString(replacement)
++		} else {
++			b.WriteString(token)
++		}
++	}
++
++	return b.String()
++}
++
++func isIdentifierStart(ch byte) bool {
++	return ch == '_' || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')
++}
++
++func isIdentifierPart(ch byte) bool {
++	return isIdentifierStart(ch) || (ch >= '0' && ch <= '9')
++}
+diff --git a/backend/src/apiserver/storage/db.go b/backend/src/apiserver/storage/db.go
+index f6ff3e7..0f56fd7 100644
+--- a/backend/src/apiserver/storage/db.go
++++ b/backend/src/apiserver/storage/db.go
+@@ -22,6 +22,7 @@ import (
+ 
+ 	"github.com/VividCortex/mysqlerr"
+ 	"github.com/go-sql-driver/mysql"
++	"github.com/jackc/pgx/v5/pgconn"
+ 	sqlite3 "github.com/mattn/go-sqlite3"
+ )
+ 
+@@ -98,6 +99,9 @@ func (d MySQLDialect) UpdateWithJointOrFrom(targetTable, joinTable, setClause, j
+ // SQLiteDialect implements SQLDialect with sqlite dialect implementation.
+ type SQLiteDialect struct{}
+ 
++// PostgreSQLDialect implements SQLDialect with PostgreSQL dialect implementation.
++type PostgreSQLDialect struct{}
++
+ func (d SQLiteDialect) GroupConcat(expr string, separator string) string {
+ 	var buffer bytes.Buffer
+ 	buffer.WriteString("GROUP_CONCAT(")
+@@ -117,6 +121,31 @@ func (d SQLiteDialect) Concat(exprs []string, separator string) string {
+ 	return strings.Join(exprs, separatorSQL)
+ }
+ 
++func (d PostgreSQLDialect) GroupConcat(expr string, separator string) string {
++	if separator == "" {
++		separator = ","
++	}
++	return fmt.Sprintf("STRING_AGG(%s::text, '%s')", expr, separator)
++}
++
++func (d PostgreSQLDialect) Concat(exprs []string, separator string) string {
++	normalized := make([]string, 0, len(exprs))
++	for _, expr := range exprs {
++		switch expr {
++		case `"["`:
++			normalized = append(normalized, `'['`)
++		case `"]"`:
++			normalized = append(normalized, `']'`)
++		default:
++			normalized = append(normalized, expr)
++		}
++	}
++	if separator == "" {
++		return fmt.Sprintf("CONCAT(%s)", strings.Join(normalized, ","))
++	}
++	return fmt.Sprintf("CONCAT_WS('%s', %s)", separator, strings.Join(normalized, ","))
++}
++
+ func (d MySQLDialect) SelectForUpdate(query string) string {
+ 	return query + " FOR UPDATE"
+ }
+@@ -125,6 +154,10 @@ func (d SQLiteDialect) SelectForUpdate(query string) string {
+ 	return query
+ }
+ 
++func (d PostgreSQLDialect) SelectForUpdate(query string) string {
++	return query + " FOR UPDATE"
++}
++
+ func (d MySQLDialect) Upsert(query string, key string, overwrite bool, columns ...string) string {
+ 	return fmt.Sprintf("%v ON DUPLICATE KEY UPDATE %v", query, prepareUpdateSuffixMySQL(columns, overwrite))
+ }
+@@ -133,15 +166,28 @@ func (d SQLiteDialect) Upsert(query string, key string, overwrite bool, columns
+ 	return fmt.Sprintf("%v ON CONFLICT(%v) DO UPDATE SET %v", query, key, prepareUpdateSuffixSQLite(columns, overwrite))
+ }
+ 
++func (d PostgreSQLDialect) Upsert(query string, key string, overwrite bool, columns ...string) string {
++	return fmt.Sprintf("%v ON CONFLICT(%v) DO UPDATE SET %v", query, key, prepareUpdateSuffixPostgreSQL(columns, overwrite))
++}
++
+ func (d SQLiteDialect) IsDuplicateError(err error) bool {
+ 	sqlError, ok := err.(sqlite3.Error)
+ 	return ok && sqlError.Code == sqlite3.ErrConstraint
+ }
+ 
++func (d PostgreSQLDialect) IsDuplicateError(err error) bool {
++	sqlError, ok := err.(*pgconn.PgError)
++	return ok && sqlError.Code == "23505"
++}
++
+ func (d SQLiteDialect) UpdateWithJointOrFrom(targetTable, joinTable, setClause, joinClause, whereClause string) string {
+ 	return fmt.Sprintf("UPDATE %s SET %s FROM %s WHERE %s AND %s", targetTable, setClause, joinTable, joinClause, whereClause)
+ }
+ 
++func (d PostgreSQLDialect) UpdateWithJointOrFrom(targetTable, joinTable, setClause, joinClause, whereClause string) string {
++	return fmt.Sprintf("UPDATE %s SET %s FROM %s WHERE %s AND %s", targetTable, setClause, joinTable, joinClause, whereClause)
++}
++
+ func NewMySQLDialect() MySQLDialect {
+ 	return MySQLDialect{}
+ }
+@@ -150,6 +196,10 @@ func NewSQLiteDialect() SQLiteDialect {
+ 	return SQLiteDialect{}
+ }
+ 
++func NewPostgreSQLDialect() PostgreSQLDialect {
++	return PostgreSQLDialect{}
++}
++
+ func prepareUpdateSuffixMySQL(columns []string, overwrite bool) string {
+ 	columnsExtended := make([]string, 0)
+ 	if overwrite {
+@@ -177,3 +227,17 @@ func prepareUpdateSuffixSQLite(columns []string, overwrite bool) string {
+ 	}
+ 	return strings.Join(columnsExtended, ",")
+ }
++
++func prepareUpdateSuffixPostgreSQL(columns []string, overwrite bool) string {
++	columnsExtended := make([]string, 0)
++	if overwrite {
++		for _, c := range columns {
++			columnsExtended = append(columnsExtended, fmt.Sprintf("%[1]v=excluded.%[1]v", c))
++		}
++	} else {
++		for _, c := range columns {
++			columnsExtended = append(columnsExtended, fmt.Sprintf("%[1]v=%[1]v", c))
++		}
++	}
++	return strings.Join(columnsExtended, ",")
++}
+-- 
+2.55.0.windows.2
+
