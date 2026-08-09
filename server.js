@@ -5845,49 +5845,105 @@ const EMBEDDING_MODEL = optionalString(process.env.OAH_EMBEDDING_MODEL) || 'text
 const EMBEDDING_DIMENSIONS = Math.max(1, Number(process.env.OAH_EMBEDDING_DIMENSIONS || 16) || 16);
 const EMBEDDING_API_KEY = optionalString(process.env.OAH_EMBEDDING_API_KEY);
 
-function embeddingProviderState() {
+// PFS AI Substrate 소비 — 약속된 경로.
+//
+// CONSTITUTION-0004 규정 2.0.4 는 AI Substrate 를 PFS core 6 concern 중 하나로 두고,
+// AI training 같은 domain engine 은 "PFS 의 일부가 아니라 PFS capability 를 소비하는
+// 상위 domain subShell" 이라고 못박는다. 임베딩 엔드포인트는 그 capability 다.
+//
+// 계약: VectorRetrievalClaim.spec.embeddingRouteRef -> LLMRouteClaim.status.endpoint
+// (ai.foundation.opensphere.io/v1alpha1). subShell 은 이 endpoint 를 소비만 하고
+// 자기 provider 를 소유하지 않는다.
+async function resolveEmbeddingCapability(namespace, routeRef) {
+  const ns = optionalString(namespace) || 'opensphere-system';
+  let route = routeRef && optionalString(routeRef.name)
+    ? { name: optionalString(routeRef.name), namespace: optionalString(routeRef.namespace) || ns }
+    : null;
+  if (!route) {
+    // 명시 참조가 없으면 네임스페이스의 VectorRetrievalClaim 이 가리키는 route 를 쓴다.
+    const claims = await k8sJson(`/apis/ai.foundation.opensphere.io/v1alpha1/namespaces/${encodeURIComponent(ns)}/vectorretrievalclaims`);
+    for (const claim of claims?.items || []) {
+      const ref = claim?.spec?.embeddingRouteRef;
+      if (ref?.name) { route = { name: ref.name, namespace: optionalString(ref.namespace) || ns }; break; }
+    }
+  }
+  if (!route) {
+    return { ready: false, reason: 'NoVectorRetrievalClaim', message: `No VectorRetrievalClaim in ${ns} declares spec.embeddingRouteRef. Bind the PFS AI Substrate embedding route before indexing or querying.` };
+  }
+  const claim = await k8sJson(`/apis/ai.foundation.opensphere.io/v1alpha1/namespaces/${encodeURIComponent(route.namespace)}/llmrouteclaims/${encodeURIComponent(route.name)}`);
+  if (!claim) {
+    return { ready: false, reason: 'LLMRouteClaimNotFound', message: `LLMRouteClaim ${route.namespace}/${route.name} was not found. The PFS AI Substrate capability is not published.` };
+  }
+  const endpoint = optionalString(claim.status?.endpoint);
+  if (claim.status?.ready !== true || !endpoint) {
+    return { ready: false, reason: 'LLMRouteClaimNotReady', message: `LLMRouteClaim ${route.namespace}/${route.name} has not published a ready endpoint yet.` };
+  }
+  return { ready: true, endpoint, route, reason: '', message: '' };
+}
+
+// 정본 경로는 PFS capability(LLMRouteClaim.status.endpoint)다.
+// OAH_EMBEDDING_ENDPOINT 는 PFS 가 없는 개발 환경을 위한 명시 override 이며 정본이 아니다.
+async function embeddingProviderState(namespace, routeRef) {
   if (EMBEDDING_MODE === 'simulated') {
     return {
       ready: true,
       simulated: true,
+      source: 'simulated',
       provider: 'opensphere-deterministic-hash',
       model: 'sha256',
       dimensions: EMBEDDING_DIMENSIONS,
       message: 'OAH_EMBEDDING_MODE=simulated. Vectors carry no meaning; similarity search results are not semantic.',
     };
   }
-  if (!EMBEDDING_ENDPOINT) {
+  if (EMBEDDING_ENDPOINT) {
+    return {
+      ready: true,
+      simulated: false,
+      source: 'env-override',
+      provider: EMBEDDING_ENDPOINT,
+      model: EMBEDDING_MODEL,
+      dimensions: EMBEDDING_DIMENSIONS,
+      message: 'OAH_EMBEDDING_ENDPOINT overrides the PFS AI Substrate capability. Bind an LLMRouteClaim for production.',
+    };
+  }
+  const capability = await resolveEmbeddingCapability(namespace, routeRef);
+  if (!capability.ready) {
     return {
       ready: false,
       simulated: false,
+      source: 'pfs-capability',
       provider: '',
       model: EMBEDDING_MODEL,
       dimensions: EMBEDDING_DIMENSIONS,
-      message: 'No embedding provider is configured. Set OAH_EMBEDDING_ENDPOINT (OpenAI-compatible /v1/embeddings), or OAH_EMBEDDING_MODE=simulated for a non-semantic local placeholder.',
+      reason: capability.reason,
+      message: capability.message,
     };
   }
   return {
     ready: true,
     simulated: false,
-    provider: EMBEDDING_ENDPOINT,
+    source: 'pfs-capability',
+    provider: capability.endpoint,
+    route: capability.route,
     model: EMBEDDING_MODEL,
     dimensions: EMBEDDING_DIMENSIONS,
     message: '',
   };
 }
 
-function requireEmbeddingProvider() {
-  const state = embeddingProviderState();
-  if (!state.ready) throw { code: 409, msg: 'EmbeddingProviderNotConfigured', details: state.message };
+async function requireEmbeddingProvider(namespace, routeRef) {
+  const state = await embeddingProviderState(namespace, routeRef);
+  // PFS capability 미바인딩은 설정 누락이 아니라 의존성 미충족이다(0003 §7).
+  if (!state.ready) throw { code: 409, msg: state.reason || 'EmbeddingProviderNotConfigured', details: state.message };
   return state;
 }
 
-async function embedText(text) {
-  const state = requireEmbeddingProvider();
+async function embedText(text, namespace, routeRef) {
+  const state = await requireEmbeddingProvider(namespace, routeRef);
   const input = optionalString(text);
   if (!input) throw { code: 400, msg: 'Cannot embed empty text.' };
   if (state.simulated) return deterministicEmbedding(input, state.dimensions);
-  const url = new URL(EMBEDDING_ENDPOINT);
+  const url = new URL(state.provider);
   const headers = { 'content-type': 'application/json' };
   if (EMBEDDING_API_KEY) headers.authorization = `Bearer ${EMBEDDING_API_KEY}`;
   const res = await fetch(url.toString(), {
@@ -6391,8 +6447,8 @@ async function ingestVectorMemoryItem({ namespace, collection, documentId, conte
   if (!text) throw { code: 400, msg: 'content is required' };
   return withModelRegistryPg(async (client) => {
     // 임베딩을 먼저 만든다. provider 가 없으면 컬렉션을 만들거나 내용을 쓰지 않는다.
-    const vector = await embedText(text);
-    const embeddingState = embeddingProviderState();
+    const embeddingState = await requireEmbeddingProvider(ns);
+    const vector = await embedText(text, ns);
     await upsertVectorCollection(client, ns, collectionName, 'AI-Workbench pgvector memory collection.', {
       provider: 'backbone-postgres',
       dimensions: embeddingState.dimensions,
@@ -6456,9 +6512,9 @@ async function vectorMemoryQuery(req) {
   const query = optionalString(body.query);
   if (!query) throw { code: 400, msg: 'query is required' };
   const limit = Math.max(1, Math.min(20, Number(body.limit || 5)));
-  const embeddingState = requireEmbeddingProvider();
+  const embeddingState = await requireEmbeddingProvider(namespace);
   return withModelRegistryPg(async (client) => {
-    const embedding = pgVectorLiteral(await embedText(query));
+    const embedding = pgVectorLiteral(await embedText(query, namespace));
     const rows = await client.query(
       `select id, namespace, collection, document_id, content, metadata, 1 - (embedding <=> $1::vector) as score
        from oah_vector_chunks
@@ -6473,11 +6529,14 @@ async function vectorMemoryQuery(req) {
       query,
       // 어떤 임베딩으로 검색했는지 응답에 남긴다. simulated 면 결과는 의미 기반이 아니다.
       embedding: {
+        // source: pfs-capability | env-override | simulated
+        source: embeddingState.source,
         provider: embeddingState.provider,
+        ...(embeddingState.route ? { route: embeddingState.route } : {}),
         model: embeddingState.model,
         dimensions: embeddingState.dimensions,
         simulated: embeddingState.simulated,
-        ...(embeddingState.simulated ? { message: embeddingState.message } : {}),
+        ...(embeddingState.message ? { message: embeddingState.message } : {}),
       },
       items: rows.rows.map((row) => ({
         id: row.id,
