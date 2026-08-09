@@ -5775,7 +5775,7 @@ async function ensureModelRegistryPgSchema(client, ownerConfig) {
       collection text not null,
       document_id text not null,
       content text not null,
-      embedding vector(16) not null,
+      embedding vector(${EMBEDDING_DIMENSIONS}) not null,
       metadata jsonb not null default '{}'::jsonb,
       created_at timestamptz not null default now(),
       foreign key (namespace, collection) references oah_vector_collections(namespace, name) on delete cascade
@@ -5828,6 +5828,88 @@ async function withModelRegistryPg(fn) {
   } finally {
     client.release();
   }
+}
+
+// 임베딩 provider.
+//
+// 종전에는 설정과 무관하게 SHA-256 해시를 벡터로 편 값(deterministicEmbedding)을 썼다.
+// 결정적이긴 하나 의미를 담지 않아, 유사한 문서가 전혀 무관한 벡터를 받는다. 즉 저장·조회
+// 배관은 도는데 검색 결과가 의미상 무의미했고, 그 사실이 어디에도 표시되지 않았다.
+//
+// 이제 실제 provider 를 요구한다. 미설정 시 가짜 벡터를 만들지 않고 fail-closed 하며,
+// 로컬 개발을 위해서는 OAH_EMBEDDING_MODE=simulated 로 명시 opt-in 해야 하고 그 경우
+// 응답과 컬렉션 레코드에 simulated 가 남는다.
+const EMBEDDING_MODE = optionalString(process.env.OAH_EMBEDDING_MODE) || 'provider';
+const EMBEDDING_ENDPOINT = optionalString(process.env.OAH_EMBEDDING_ENDPOINT);
+const EMBEDDING_MODEL = optionalString(process.env.OAH_EMBEDDING_MODEL) || 'text-embedding-3-small';
+const EMBEDDING_DIMENSIONS = Math.max(1, Number(process.env.OAH_EMBEDDING_DIMENSIONS || 16) || 16);
+const EMBEDDING_API_KEY = optionalString(process.env.OAH_EMBEDDING_API_KEY);
+
+function embeddingProviderState() {
+  if (EMBEDDING_MODE === 'simulated') {
+    return {
+      ready: true,
+      simulated: true,
+      provider: 'opensphere-deterministic-hash',
+      model: 'sha256',
+      dimensions: EMBEDDING_DIMENSIONS,
+      message: 'OAH_EMBEDDING_MODE=simulated. Vectors carry no meaning; similarity search results are not semantic.',
+    };
+  }
+  if (!EMBEDDING_ENDPOINT) {
+    return {
+      ready: false,
+      simulated: false,
+      provider: '',
+      model: EMBEDDING_MODEL,
+      dimensions: EMBEDDING_DIMENSIONS,
+      message: 'No embedding provider is configured. Set OAH_EMBEDDING_ENDPOINT (OpenAI-compatible /v1/embeddings), or OAH_EMBEDDING_MODE=simulated for a non-semantic local placeholder.',
+    };
+  }
+  return {
+    ready: true,
+    simulated: false,
+    provider: EMBEDDING_ENDPOINT,
+    model: EMBEDDING_MODEL,
+    dimensions: EMBEDDING_DIMENSIONS,
+    message: '',
+  };
+}
+
+function requireEmbeddingProvider() {
+  const state = embeddingProviderState();
+  if (!state.ready) throw { code: 409, msg: 'EmbeddingProviderNotConfigured', details: state.message };
+  return state;
+}
+
+async function embedText(text) {
+  const state = requireEmbeddingProvider();
+  const input = optionalString(text);
+  if (!input) throw { code: 400, msg: 'Cannot embed empty text.' };
+  if (state.simulated) return deterministicEmbedding(input, state.dimensions);
+  const url = new URL(EMBEDDING_ENDPOINT);
+  const headers = { 'content-type': 'application/json' };
+  if (EMBEDDING_API_KEY) headers.authorization = `Bearer ${EMBEDDING_API_KEY}`;
+  const res = await fetch(url.toString(), {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ model: state.model, input }),
+  });
+  const raw = await res.text();
+  let payload = {};
+  try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = { raw }; }
+  if (!res.ok) throw { code: 502, msg: 'EmbeddingProviderFailed', details: payload.error?.message || payload.message || `HTTP ${res.status}` };
+  const vector = payload?.data?.[0]?.embedding;
+  if (!Array.isArray(vector) || !vector.length) throw { code: 502, msg: 'EmbeddingProviderFailed', details: 'Provider returned no embedding vector.' };
+  // 차원이 어긋난 채로 쓰면 기존 인덱스를 조용히 오염시킨다. 재색인을 요구한다.
+  if (vector.length !== state.dimensions) {
+    throw {
+      code: 409,
+      msg: 'EmbeddingDimensionMismatch',
+      details: `Provider returned ${vector.length} dimensions but the collection uses ${state.dimensions}. Set OAH_EMBEDDING_DIMENSIONS=${vector.length} and re-index existing collections.`,
+    };
+  }
+  return vector.map((value) => Number(value) || 0);
 }
 
 function deterministicEmbedding(text, dimensions = 16) {
@@ -6308,9 +6390,15 @@ async function ingestVectorMemoryItem({ namespace, collection, documentId, conte
   const text = optionalString(content);
   if (!text) throw { code: 400, msg: 'content is required' };
   return withModelRegistryPg(async (client) => {
+    // 임베딩을 먼저 만든다. provider 가 없으면 컬렉션을 만들거나 내용을 쓰지 않는다.
+    const vector = await embedText(text);
+    const embeddingState = embeddingProviderState();
     await upsertVectorCollection(client, ns, collectionName, 'AI-Workbench pgvector memory collection.', {
       provider: 'backbone-postgres',
-      dimensions: 16,
+      dimensions: embeddingState.dimensions,
+      embeddingProvider: embeddingState.provider,
+      embeddingModel: embeddingState.model,
+      embeddingSimulated: embeddingState.simulated,
       owner: optionalString(owner) || actor?.username || 'opensphere-ai-hub',
       groups: identityGroupAliases(groups || actor?.groups || []),
     }, {
@@ -6318,7 +6406,7 @@ async function ingestVectorMemoryItem({ namespace, collection, documentId, conte
       groups: identityGroupAliases(groups || actor?.groups || []),
     });
     const id = shortHash(`${ns}/${collectionName}/${docId}/${text}`);
-    const embedding = pgVectorLiteral(deterministicEmbedding(text));
+    const embedding = pgVectorLiteral(vector);
     await client.query(
       `insert into oah_vector_chunks (id, namespace, collection, document_id, content, embedding, metadata, created_at)
        values ($1, $2, $3, $4, $5, $6::vector, $7::jsonb, now())
@@ -6368,8 +6456,9 @@ async function vectorMemoryQuery(req) {
   const query = optionalString(body.query);
   if (!query) throw { code: 400, msg: 'query is required' };
   const limit = Math.max(1, Math.min(20, Number(body.limit || 5)));
+  const embeddingState = requireEmbeddingProvider();
   return withModelRegistryPg(async (client) => {
-    const embedding = pgVectorLiteral(deterministicEmbedding(query));
+    const embedding = pgVectorLiteral(await embedText(query));
     const rows = await client.query(
       `select id, namespace, collection, document_id, content, metadata, 1 - (embedding <=> $1::vector) as score
        from oah_vector_chunks
@@ -6382,6 +6471,14 @@ async function vectorMemoryQuery(req) {
       namespace,
       collection,
       query,
+      // 어떤 임베딩으로 검색했는지 응답에 남긴다. simulated 면 결과는 의미 기반이 아니다.
+      embedding: {
+        provider: embeddingState.provider,
+        model: embeddingState.model,
+        dimensions: embeddingState.dimensions,
+        simulated: embeddingState.simulated,
+        ...(embeddingState.simulated ? { message: embeddingState.message } : {}),
+      },
       items: rows.rows.map((row) => ({
         id: row.id,
         namespace: row.namespace,
