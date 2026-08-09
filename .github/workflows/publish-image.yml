@@ -1,23 +1,7 @@
-name: Publish OpenSphere AI Workbench image
+name: Publish OpenSphere AI Workbench GA image
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - Dockerfile
-      - server.js
-      - server-runtime/**
-      - package.json
-      - package-lock.json
-      - angular.json
-      - src/**
-      - test/**
-      - scripts/**
-      - tools/**
-      - ui-shell/**
-      - .github/scripts/**
-      - .github/workflows/publish-image.yml
 
 permissions:
   contents: read
@@ -27,7 +11,7 @@ permissions:
   artifact-metadata: write
 
 concurrency:
-  group: opensphere-shell-ai-workbench-edge-image
+  group: opensphere-shell-ai-workbench-ga-image
   cancel-in-progress: false
 
 env:
@@ -63,18 +47,20 @@ jobs:
         shell: bash
         env:
           SIGNING_KEY: ${{ secrets.DUPA_SIGNING_KEY_PEM }}
-          DUPA_SIGNING_KEY_ID: opensphere-plugins-v1
+          DUPA_SIGNING_KEY_ID: opensphere-plugins-v5
           OPENSPHERE_SDK: ${{ github.workspace }}/OpenSphere-SDK
         run: |
           set -euo pipefail
           test -n "$SIGNING_KEY"
-          printf '%s' "$SIGNING_KEY" > "$RUNNER_TEMP/opensphere-plugins-v1.pem"
-          chmod 600 "$RUNNER_TEMP/opensphere-plugins-v1.pem"
-          export DUPA_SIGNING_KEY="$RUNNER_TEMP/opensphere-plugins-v1.pem"
+          printf '%s' "$SIGNING_KEY" > "$RUNNER_TEMP/opensphere-plugins-v5.pem"
+          chmod 600 "$RUNNER_TEMP/opensphere-plugins-v5.pem"
+          export DUPA_SIGNING_KEY="$RUNNER_TEMP/opensphere-plugins-v5.pem"
           npm --prefix OpenSphere-SDK install --no-audit --no-fund
           npm --prefix OpenSphere-SDK run build
           npm ci --no-audit --no-fund
+          npm run build
           npm run package:module
+          npm run verify:artifacts
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -82,6 +68,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: release
+        name: Calculate official KST version
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
+          release_tag="$(TZ=Asia/Seoul date -d "@$release_epoch" +%Y%m%d%H%M)"
+          [[ "$release_tag" =~ ^[0-9]{12}$ ]]
+          echo "version=$release_tag" >> "$GITHUB_OUTPUT"
       - id: package
         shell: bash
         run: |
@@ -96,11 +91,16 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: type=sha,prefix=sha-
           labels: |
-            io.opensphere.channel=edge
+            io.opensphere.channel=ga
             io.opensphere.source-revision=${{ github.sha }}
+            io.opensphere.release-tag=${{ steps.release.outputs.version }}
+            opensphere.io/build-authority=github-actions
+            opensphere.io/release-class=ga
+            opensphere.io/ga-eligible=true
+            io.opensphere.compatibility-version=${{ steps.package.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.version=${{ steps.package.outputs.version }}
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}
       - id: build
         uses: docker/build-push-action@v6
         with:
@@ -113,13 +113,15 @@ jobs:
           build-args: |
             ${{ steps.package.outputs.descriptor-build-arg }}
             OS_MODULE_SIGNATURE=${{ steps.package.outputs.signature }}
-            OS_MODULE_KEY_ID=opensphere-plugins-v1
+            OS_MODULE_KEY_ID=opensphere-plugins-v5
+            APP_VERSION=${{ steps.package.outputs.version }}
+            OS_RELEASE_TAG=${{ steps.release.outputs.version }}
           provenance: mode=max
           cache-from: type=gha,scope=opensphere-shell-ai-workbench
           cache-to: type=gha,mode=max,scope=opensphere-shell-ai-workbench
       - uses: imjasonh/setup-crane@v0.4
       - name: Verify signed module labels
-        run: bash .github/scripts/verify-module-label.sh "${{ env.IMAGE }}@${{ steps.build.outputs.digest }}" "${{ steps.package.outputs.version }}"
+        run: bash .github/scripts/verify-module-label.sh "${{ env.IMAGE }}@${{ steps.build.outputs.digest }}" "${{ steps.package.outputs.version }}" "${{ steps.release.outputs.version }}"
       - uses: actions/attest@v4
         with:
           subject-name: ${{ env.IMAGE }}
@@ -138,7 +140,7 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           sbom-path: ${{ runner.temp }}/opensphere-shell-ai-workbench.spdx.json
           push-to-registry: true
-      - name: Advance edge channel
+      - name: Advance GA channel
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -146,8 +148,7 @@ jobs:
         run: |
           set -euo pipefail
           crane auth login ghcr.io -u "${{ github.actor }}" -p "$GH_TOKEN"
-          release_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
-          release_tag="$(TZ=Asia/Seoul date -d "@$release_epoch" +%Y%m%d%H%M)"
+          release_tag="${{ steps.release.outputs.version }}"
           [[ "$release_tag" =~ ^[0-9]{12}$ ]]
           existing="$(crane digest "${IMAGE}:${release_tag}" 2>/dev/null || true)"
           if [[ -n "$existing" && "$existing" != "$DIGEST" ]]; then
@@ -156,5 +157,6 @@ jobs:
           fi
           crane tag "${IMAGE}@${DIGEST}" "$release_tag"
           test "$(crane digest "${IMAGE}:${release_tag}")" = "$DIGEST"
-          crane tag "${IMAGE}@${DIGEST}" edge
-          test "$(crane digest "${IMAGE}:edge")" = "$DIGEST"
+          crane tag "${IMAGE}@${DIGEST}" ga
+          test "$(crane digest "${IMAGE}:ga")" = "$DIGEST"
+          echo "- \`${IMAGE}:${release_tag}\` → \`${DIGEST}\`" >> "$GITHUB_STEP_SUMMARY"
