@@ -39,13 +39,16 @@ test('implements every production integration contribution', () => {
   );
 });
 
-test('ships actual navigation, search, manual and notification implementations', () => {
+test('ships navigation, search and manual implementations without a bootstrap toast', () => {
   const entry = fs.readFileSync(path.join(root, 'ui-shell', 'ui-shell.plugin.js'), 'utf8');
+  const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
   const manual = fs.readFileSync(path.join(root, 'ui-shell', 'manual', 'ai.ko.md'), 'utf8');
   assert.match(entry, /extensions\.nav\?\.contribute/);
   assert.match(entry, /extensions\.search\?\.contribute/);
   assert.match(entry, /extensions\.manual\.contribute/);
-  assert.match(entry, /notify\?\.publish/);
+  assert.doesNotMatch(entry, /notify\?\.publish/);
+  assert.doesNotMatch(entry, /AI-Workbench ready|Production subShell capabilities are connected|ai\.subshell\.ready/);
+  assert.match(server, /async function publishNotify/);
   assert.match(entry, /extensions\.manual\?\.clear/);
   assert.match(manual, /^# AI-Workbench/m);
   assert.match(manual, /os ai-workbench readiness/);

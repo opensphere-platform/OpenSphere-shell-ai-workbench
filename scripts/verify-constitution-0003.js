@@ -41,8 +41,14 @@ assert.deepEqual(pkg.spec.contributions.observability, { enabled: true, logs: tr
 
 for (const marker of [
   'ctx.routing', 'extensions.nav?.contribute', 'extensions.search?.contribute',
-  'extensions.manual.contribute', 'ctx.notify?.publish', 'export function deactivate',
+  'extensions.manual.contribute', 'export function deactivate',
 ]) assert.match(adapter, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+
+assert.doesNotMatch(
+  adapter,
+  /AI-Workbench ready|Production subShell capabilities are connected|ai\.subshell\.ready/,
+  'subShell activation must remain silent; actionable notifications are emitted by the backend lifecycle',
+);
 
 for (const endpoint of [
   "p === '/readyz'", "p === '/openapi.json'", "p === '/search'",
