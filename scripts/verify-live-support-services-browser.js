@@ -308,10 +308,10 @@ async function main() {
 
     await client.send('Page.navigate', { url: route });
     await waitForRuntime(client, `location.href.includes('/p/ai/cluster-settings/support-services')`, 'support-services route');
-    await waitForRuntime(client, `((document.body.innerText || '') + ' ' + (document.body.textContent || '')).toLowerCase().includes('oah product flow readiness')`, 'product flow panel');
+    await waitForRuntime(client, `((document.body.innerText || '') + ' ' + (document.body.textContent || '')).toLowerCase().includes('ai-workbench product flow readiness')`, 'product flow panel');
 
     const requiredTexts = [
-      'oah product flow readiness',
+      'ai-workbench product flow readiness',
       'gpu training smoke',
       'backbone pgvector memory',
       'kserve / knative serving',

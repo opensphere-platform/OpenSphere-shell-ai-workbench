@@ -48,7 +48,13 @@ async function contributeManual(ctx, routeBase) {
   });
 }
 
-export async function activate(ctx) {
+function contributeManualInBackground(ctx, routeBase) {
+  void contributeManual(ctx, routeBase).catch((error) => {
+    console.warn('[AI-Workbench] Manual contribution is temporarily unavailable', error);
+  });
+}
+
+export function activate(ctx) {
   activeContext = ctx;
   const base = (ctx.api?.baseUrl ?? '').replace(/\/$/, '');
   const routeBase = ctx.routing?.basePath ?? `/p/${ctx.pluginId ?? PLUGIN_ID}`;
@@ -65,7 +71,9 @@ export async function activate(ctx) {
       return Array.isArray(body.items) ? body.items : [];
     },
   });
-  await contributeManual(ctx, routeBase);
+  // Manual content is an optional contribution. A slow manual endpoint must not
+  // hold the Main Shell activation boundary or delay unrelated subShells.
+  contributeManualInBackground(ctx, routeBase);
 }
 
 export function deactivate() {

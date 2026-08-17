@@ -55,6 +55,24 @@ test('ships navigation, search and manual implementations without a bootstrap to
   assert.match(manual, /opensphere\.v1/);
 });
 
+test('keeps optional manual loading outside the host activation boundary', () => {
+  const entry = fs.readFileSync(path.join(root, 'ui-shell', 'ui-shell.plugin.js'), 'utf8');
+  assert.match(entry, /export function activate\(ctx\)/);
+  assert.match(entry, /void contributeManual\(ctx, routeBase\)\.catch/);
+  assert.doesNotMatch(entry, /await contributeManual\(ctx, routeBase\)/);
+});
+
+test('authorizes independent summary groups concurrently', () => {
+  const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+  const summaryStart = server.indexOf('async function summary(req)');
+  const summaryEnd = server.indexOf('\nasync function capabilities', summaryStart);
+  const summarySource = server.slice(summaryStart, summaryEnd > summaryStart ? summaryEnd : undefined);
+  assert.match(summarySource, /visibleProjectItems,[\s\S]*= await Promise\.all\(\[/);
+  assert.match(summarySource, /filterReadableProjects\(req, projectItems\)/);
+  assert.match(summarySource, /filterReadableItems\(req, enabledApps\)/);
+  assert.doesNotMatch(summarySource, /const visibleWorkbenches = await/);
+});
+
 test('derives every host route from the host-owned plugin id', () => {
   const entry = fs.readFileSync(path.join(root, 'ui-shell', 'ui-shell.plugin.js'), 'utf8');
   assert.match(entry, /ctx\.routing\?\.basePath/);

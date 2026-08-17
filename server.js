@@ -16819,21 +16819,42 @@ async function summary(req) {
     aiResources('enabledApplications'),
     nativeLearningResourceRecords(),
   ]);
-  const visibleProjectItems = await filterReadableProjects(req, projectItems);
-  const visibleWorkbenches = await filterReadableItems(req, workbenches);
-  const visibleRoutes = await filterReadableItems(req, routes);
-  const visibleAgents = await filterReadableItems(req, agents);
-  const visibleModelRegistry = await filterReadableItems(req, modelRegistry);
-  const visibleServingRuntimes = await filterReadableItems(req, servingRuntimes);
-  const visiblePipelines = await filterReadableItems(req, pipelines);
-  const visiblePipelineRuns = await filterReadableItems(req, pipelineRuns);
-  const visibleTrainingJobs = await filterReadableItems(req, trainingJobs);
-  const visibleExperiments = await filterReadableItems(req, experiments);
-  const visibleEvalJobs = await filterReadableItems(req, evalJobs);
-  const visibleInference = await filterReadableItems(req, inference);
-  const visibleMonitoringTargets = await filterReadableItems(req, monitoringTargets);
-  const visibleDistributedWorkloads = await filterReadableItems(req, distributedWorkloads);
-  const visibleEnabledApps = await filterReadableItems(req, enabledApps);
+  // Each filter performs independent authorization checks. Running the groups
+  // serially made the home summary take ~20s on edge and occupied the Console's
+  // shared request budget long enough to starve unrelated subShell activation.
+  const [
+    visibleProjectItems,
+    visibleWorkbenches,
+    visibleRoutes,
+    visibleAgents,
+    visibleModelRegistry,
+    visibleServingRuntimes,
+    visiblePipelines,
+    visiblePipelineRuns,
+    visibleTrainingJobs,
+    visibleExperiments,
+    visibleEvalJobs,
+    visibleInference,
+    visibleMonitoringTargets,
+    visibleDistributedWorkloads,
+    visibleEnabledApps,
+  ] = await Promise.all([
+    filterReadableProjects(req, projectItems),
+    filterReadableItems(req, workbenches),
+    filterReadableItems(req, routes),
+    filterReadableItems(req, agents),
+    filterReadableItems(req, modelRegistry),
+    filterReadableItems(req, servingRuntimes),
+    filterReadableItems(req, pipelines),
+    filterReadableItems(req, pipelineRuns),
+    filterReadableItems(req, trainingJobs),
+    filterReadableItems(req, experiments),
+    filterReadableItems(req, evalJobs),
+    filterReadableItems(req, inference),
+    filterReadableItems(req, monitoringTargets),
+    filterReadableItems(req, distributedWorkloads),
+    filterReadableItems(req, enabledApps),
+  ]);
   const allVisible = [
     ...visibleProjectItems,
     ...visibleWorkbenches,

@@ -40,7 +40,7 @@ const upstreamParityVerifier = read('scripts/verify-upstream-parity.ps1');
 const packageJson = read('package.json');
 const gitignore = read('.gitignore');
 const pluginPackage = read('uipluginpackage.yaml');
-const supportDoc = readRepo('_DOCS_/OAH-SUPPORT-SERVICES-INSTALLATION-MAP-2026-06-29.md');
+const supportDoc = readRepo('_DOCS_/99-진행기록/2026-ai-hub-workbench/OAH-SUPPORT-SERVICES-INSTALLATION-MAP-2026-06-29.md');
 const dupaController = readRepo('OpenSphere-console/backend/dupa-control/controller.js');
 const dupaCrds = readRepo('OpenSphere-console/backend/dupa-control/ui-plugin-crds.yaml');
 
@@ -84,16 +84,16 @@ for (const id of [
 
 for (const uiText of [
   'Console Backbone provider',
-  'OAH foundation services',
-  'OAH product flow readiness',
+  'Foundation services',
+  'AI-Workbench product flow readiness',
   'training, KFP pipeline execution',
   'pgvector memory',
   'KServe serving',
   'Backbone-backed service availability',
   'Configure Backbone foundation',
   'Use Backbone defaults',
-  'Preview OAH claim',
-  'Apply OAH claim',
+  'Preview AI-Workbench claim',
+  'Apply AI-Workbench claim',
   'Bind issued Secrets',
   'Configuration pages',
   'Upstream parity inventory',
@@ -326,8 +326,8 @@ for (const preflightVerifierText of [
 for (const browserVerifierText of [
   'osp-ai-shell',
   '/p/ai/cluster-settings/support-services',
-  'OAH support services',
-  'oah product flow readiness',
+  'AI-Workbench support services',
+  'ai-workbench product flow readiness',
   'GPU training smoke',
   'Backbone pgvector memory',
   'KServe / Knative serving',
@@ -336,7 +336,7 @@ for (const browserVerifierText of [
   'Data Science Pipelines Operator only',
   'traffic=100%',
   'Use Backbone defaults',
-  'Apply OAH claim',
+  'Apply AI-Workbench claim',
   'Bind issued Secrets',
   'Preview pipelines foundation',
   'configure registry foundation',
@@ -503,7 +503,7 @@ for (const liveBrowserText of [
   'oah-live-browser-smoke',
   'Vector owner/group browser smoke failed',
   '/api/plugins/ai/',
-  'oah product flow readiness',
+  'ai-workbench product flow readiness',
   'gpu training smoke',
   'backbone pgvector memory',
   'kserve / knative serving',
