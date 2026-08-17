@@ -66,16 +66,6 @@ export async function activate(ctx) {
     },
   });
   await contributeManual(ctx, routeBase);
-  ctx.notify?.publish({
-    title: 'AI-Workbench ready',
-    detail: 'Production subShell capabilities are connected to the Main Shell.',
-    severity: 'success',
-    persistent: false,
-    category: 'AI lifecycle',
-    route: routeBase,
-    topic: 'ai.subshell.ready',
-    dedupKey: `${PLUGIN_ID}-ready-${RELEASE}`,
-  });
 }
 
 export function deactivate() {
